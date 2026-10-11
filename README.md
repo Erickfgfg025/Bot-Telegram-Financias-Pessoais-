@@ -13,11 +13,13 @@ A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como
 - Consultar progresso do orçamento com /orcamentos, incluindo aviso ao atingir 80% e 100% do limite.\n- Receber alertas imediatos quando um novo gasto cruzar 80% ou 100% do orçamento da categoria.\n- Consultar /relatorio para receitas, despesas, resultado do mês, taxa de economia e até cinco maiores categorias de gastos.
 - Listar categorias com /categorias.
 - Histórico de mensagens e processamento idempotente de updates do Telegram.
+- Criar lançamentos recorrentes com `/recorrente despesa 120 aluguel mensal 2026-11-05`, listar com `/recorrentes` e pausar com `/pausarrecorrente 1`.
+- Criar lembretes com `/lembrete 2026-11-05 09:00 pagar conta de luz`, listar com `/lembretes` e cancelar com `/cancelarlembrete 1`.
 
 ## Próximas etapas
 
 - Contas e transferências completas.
-- Metas, dívidas, pagamentos, recorrências e lembretes.
+- Metas, dívidas e pagamentos.
 - Relatórios mais detalhados e alertas proativos.
 - Conversa contextual avançada, memória semântica e entrada por voz.
 - Melhorias de interpretação de linguagem natural com fallback determinístico.
@@ -28,6 +30,7 @@ A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como
 - Esquema inicial aplicado; 14 tabelas verificadas com RLS habilitado.
 - Edge Function telegram-webhook publicada.
 - O webhook ainda exige TELEGRAM_BOT_TOKEN e TELEGRAM_WEBHOOK_SECRET para processar mensagens.
+- A função `iris-scheduler` foi publicada para processar lembretes vencidos e recorrências; a execução automática depende de configurar `IRIS_SCHEDULER_SECRET` nas Edge Function Secrets e guardar o mesmo valor no Supabase Vault antes de ativar o Cron.
 - Webhook ativo na versão 13.
 - O parser de lançamentos continua determinístico e baseado em padrões simples. Categorias automáticas também usam palavras-chave, então descrições ambíguas podem cair em “Outros gastos” ou “Outras receitas”.
 - Os orçamentos são consultados sob demanda com /orcamentos. Alertas automáticos por mensagem, voz, IA externa, embeddings ativos e lembretes agendados ainda não estão ativados.
@@ -41,6 +44,8 @@ A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como
 5. Teste /start e registre um lançamento de teste como “Gastei 25,90 no almoço”.
 6. Confira /categorias; defina um limite com /orcamento alimentação 500, consulte /orcamentos e gere /relatorio.
 7. Para editar, use /editar, escolha com /editar 1 e envie o novo valor e descrição. Para excluir, use /excluir e confirme com /confirmar.
+8. Para recorrências, use `/recorrente receita|despesa VALOR DESCRIÇÃO semanal|mensal|anual AAAA-MM-DD`; para lembretes, `/lembrete AAAA-MM-DD HH:MM descrição` (horário de Brasília).
+9. O agendador usa a função `iris-scheduler`. Configure `IRIS_SCHEDULER_SECRET` nos secrets da Edge Function e salve o mesmo segredo no Vault com o nome `iris_scheduler_secret`. Depois, crie o job Cron que chama `/functions/v1/iris-scheduler` a cada 5 minutos usando `net.http_post` e o segredo do Vault no cabeçalho `x-iris-scheduler-secret`.
 8. Se houver erro, consulte os logs da Edge Function antes de repetir lançamentos para evitar duplicações.
 
 A função usa verify_jwt=false porque o Telegram não envia um JWT Supabase. Ela valida o cabeçalho secreto x-telegram-bot-api-secret-token. Sem o secret configurado, responde 503 e não processa mensagens.
