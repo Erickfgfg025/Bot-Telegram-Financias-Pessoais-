@@ -118,6 +118,38 @@ function validIsoDate(value: string): boolean {
 function normalizeText(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR").trim();
 }
+
+function cleanMemoryFacts(input: unknown, additions: unknown[] = []): string[] {
+  const source = Array.isArray(input) ? input.filter((x): x is string => typeof x === "string") : [];
+  const result: string[] = [];
+  const canonical = (raw: string) => {
+    const fact = raw.trim().replace(/\s+/g, " ").replace(/[.!?]+$/, "").slice(0, 220);
+    const n = normalizeText(fact);
+    const p = fact.match(/(?:meu\s+)?projeto atual(?: do usuario)?\s+(?:se chama|chama-se|e|é)\s+(.+)/i)
+      || fact.match(/nome do meu projeto\s+(?:e|é|se chama)\s+(.+)/i);
+    if (p?.[1]) return "Projeto atual: " + p[1].trim().replace(/[.!?]+$/, "");
+    if (/\b(?:prefiro|prefere|preferencia)\b/.test(n) && /\brespostas?\s+(?:curtas?|breves?|detalhadas?|longas?|objetivas?|completas?)\b/.test(n)) {
+      const style = n.match(/\brespostas?\s+(curtas?|breves?|detalhadas?|longas?|objetivas?|completas?)\b/)?.[1];
+      if (style) return "Preferência de resposta: " + style;
+    }
+    return fact;
+  };
+  const key = (fact: string) => {
+    const n = normalizeText(fact);
+    if (n.startsWith("projeto atual:")) return "projeto_atual";
+    if (n.startsWith("preferencia de resposta:")) return "preferencia_resposta";
+    return n.replace(/^(?:o usuario|a usuaria|usuario|usuaria|eu|meu|minha|meus|minhas|o|a)\s+/, "").replace(/\b(?:se chama|chama-se|prefiro|prefere)\b/g, "").replace(/\s+/g, " ").trim();
+  };
+  for (const raw of [...source, ...additions.filter((x): x is string => typeof x === "string")]) {
+    const fact = canonical(raw);
+    if (fact.length < 4 || /senha|password|token|api.?key|chave secreta|numero completo do cartao|cvv/i.test(fact)) continue;
+    const k = key(fact);
+    const index = result.findIndex(existing => key(existing) === k);
+    if (index < 0) result.push(fact);
+    else result[index] = fact;
+  }
+  return result.slice(-40);
+}
 function categoryGuess(description: string, kind: "income" | "expense"): { name: string; icon: string } {
   const text = normalizeText(description);
   if (kind === "income") {
@@ -343,18 +375,10 @@ async function askGeminiIntent(userId: string, preferences: Record<string, unkno
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed?.memory_updates)) {
       const oldFacts = Array.isArray(preferences.memory_facts) ? preferences.memory_facts.filter((x): x is string => typeof x === "string") : [];
-      const additions = parsed.memory_updates
-        .filter((x: unknown): x is string => typeof x === "string")
-        .map((x: string) => x.trim().replace(/\s+/g, " ").slice(0, 220))
-        .filter((x: string) => x.length >= 4 && !/senha|password|token|api.?key|chave secreta|numero completo do cartao|cvv/i.test(x));
-      const merged = [...oldFacts];
-      for (const fact of additions) {
-        if (!merged.some(existing => normalizeText(existing) === normalizeText(fact))) merged.push(fact);
-      }
-      preferences.memory_facts = merged.slice(-40);
-      if (merged.length !== oldFacts.length || additions.some(fact => !oldFacts.some(old => normalizeText(old) === normalizeText(fact)))) {
-        await writePreferences(userId, preferences);
-      }
+      const merged = cleanMemoryFacts(oldFacts, parsed.memory_updates);
+      const changed = JSON.stringify(merged) !== JSON.stringify(oldFacts);
+      preferences.memory_facts = merged;
+      if (changed) await writePreferences(userId, preferences);
     }
     if (!["command", "reply", "mixed", "batch"].includes(parsed?.kind) || typeof parsed?.value !== "string") return null;
     const value = parsed.value.trim().slice(0, 3500);
@@ -597,11 +621,8 @@ async function sendText(chatId: number, userId: string, text: string) {
     const rawFacts = explicitMemoryMatch[1].trim().replace(/[.!?]+$/, "");
     const additions = rawFacts.split(/\s+e que\s+/i).map((fact: string) => fact.trim()).filter((fact: string) => fact.length >= 4);
     const oldFacts = Array.isArray(editPreferences.memory_facts) ? editPreferences.memory_facts.filter((fact): fact is string => typeof fact === "string") : [];
-    const merged = [...oldFacts];
-    for (const fact of additions) {
-      if (!merged.some(existing => normalizeText(existing) === normalizeText(fact))) merged.push(fact.slice(0, 220));
-    }
-    editPreferences.memory_facts = merged.slice(-40);
+    const merged = cleanMemoryFacts(oldFacts, additions);
+    editPreferences.memory_facts = merged;
     await writePreferences(userId, editPreferences);
     aiConversationReply = additions.length
       ? "Pode deixar! 🧠 Guardei isso na minha memória para levar em conta nas próximas conversas."
