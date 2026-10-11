@@ -591,6 +591,23 @@ async function sendText(chatId: number, userId: string, text: string) {
   let aiSupplementaryReply: string | null = null;
   let aiBatchTransactions: FinancialEntry[] | null = null;
 
+  // Guardar pedidos explícitos de memória sem depender da classificação do modelo de IA.
+  const explicitMemoryMatch = originalText.match(/^\\s*(?:iris[,:;]?\\s*)?(?:lembra|lembre-se|guarda|guarde|memoriza|memorize|anota|anote|salva|salve)\\s+(?:que\\s+)?(.+?)\\s*[.!?]*\\s*$/i);
+  if (explicitMemoryMatch && !/^(?:o que|qual|quem|quando|onde|como)\\b/i.test(explicitMemoryMatch[1].trim())) {
+    const rawFacts = explicitMemoryMatch[1].trim().replace(/[.!?]+$/, "");
+    const additions = rawFacts.split(/\\s+e que\\s+/i).map((fact: string) => fact.trim()).filter((fact: string) => fact.length >= 4);
+    const oldFacts = Array.isArray(editPreferences.memory_facts) ? editPreferences.memory_facts.filter((fact): fact is string => typeof fact === "string") : [];
+    const merged = [...oldFacts];
+    for (const fact of additions) {
+      if (!merged.some(existing => normalizeText(existing) === normalizeText(fact))) merged.push(fact.slice(0, 220));
+    }
+    editPreferences.memory_facts = merged.slice(-40);
+    await writePreferences(userId, editPreferences);
+    aiConversationReply = additions.length
+      ? "Pode deixar! 🧠 Guardei isso na minha memória para levar em conta nas próximas conversas."
+      : "Me diga exatamente o que você quer que eu guarde, que eu salvo na memória. 🧠";
+  }
+
   // Responda perguntas sobre a primeira mensagem usando o histórico real salvo, sem depender da interpretação do Gemini.
   const normalizedQuestion = normalizeText(originalText);
   const asksFirstMessage = /\b(?:qual foi|lembra|lembra qual|me diz|diz)\b.{0,55}\b(?:primeira|primeiro)\b.{0,45}\b(?:mensagem|coisa que eu disse|coisa que te mandei|texto que te mandei)\b|\b(?:primeira|primeiro)\b.{0,45}\b(?:mensagem)\b.{0,45}\b(?:te mandei|que mandei|que enviei|que eu disse|que te enviei)\b/.test(normalizedQuestion);
@@ -603,6 +620,12 @@ async function sendText(chatId: number, userId: string, text: string) {
         ? `A primeira mensagem sua que tenho registrada aqui foi: “${firstContent.slice(0, 1000)}” 📌`
         : "Ainda não encontrei uma mensagem anterior registrada por aqui. 😅";
     }
+  }
+
+  // Responder perguntas simples de memória diretamente quando já houver fatos salvos.
+  if (!aiConversationReply && /\\b(?:meu projeto|nome do meu projeto|como eu prefiro|como prefiro|minhas preferencias|o que voce lembra|o que lembra|qual .* eu te falei|lembra .* que)\\b/.test(normalizedQuestion)) {
+    const facts = Array.isArray(editPreferences.memory_facts) ? editPreferences.memory_facts.filter((fact): fact is string => typeof fact === "string") : [];
+    if (facts.length) aiConversationReply = "🧠 Lembro destas informações:\\n\\n" + facts.map((fact, index) => (index + 1) + ". " + fact).join("\\n");
   }
 
   if (!aiConversationReply && !text.startsWith("/") && text === originalText && (!parseEntry(text) || looksLikeMixedFinancialMessage(text) || looksLikeMultiFinancialMessage(text)) && !editingAtStart) {
