@@ -208,12 +208,12 @@ function totals(rows: TransactionRow[]) {
 type GeminiPart = Record<string, unknown>;
 type GeminiDecision = { kind: "command" | "reply"; value: string };
 
-async function callGemini(parts: GeminiPart[], options: { responseJson?: boolean; system?: string } = {}): Promise<string | null> {
+async function callGemini(parts: GeminiPart[], options: { responseJson?: boolean; system?: string; contents?: Array<{ role: string; parts: GeminiPart[] }> } = {}): Promise<string | null> {
   const apiKey = env("GEMINI_API_KEY");
   if (!apiKey) return null;
-  const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=" + encodeURIComponent(apiKey);
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
   const body: Record<string, unknown> = {
-    contents: [{ role: "user", parts }],
+    contents: options.contents?.length ? options.contents : [{ role: "user", parts }],
     generationConfig: { temperature: 0.25, maxOutputTokens: options.responseJson ? 650 : 700 },
   };
   if (options.system) body.systemInstruction = { parts: [{ text: options.system }] };
@@ -234,7 +234,7 @@ async function callGemini(parts: GeminiPart[], options: { responseJson?: boolean
   }
   const response = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
@@ -315,8 +315,7 @@ async function askGeminiIntent(userId: string, preferences: Record<string, unkno
       .filter((row: any) => (row.role === "user" || row.role === "assistant") && typeof row.content === "string")
       .map((row: any) => ({ role: row.role === "assistant" ? "model" : "user", parts: [{ text: String(row.content).slice(0, 2500) }] }));
     const history = contents.length ? contents : [{ role: "user", parts: [{ text: "Olá" }] }];
-    const allParts = history.flatMap((item: any) => item.parts);
-    const raw = await callGemini(allParts, { responseJson: true, system });
+    const raw = await callGemini([], { responseJson: true, system, contents: history });
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if ((parsed?.kind !== "command" && parsed?.kind !== "reply") || typeof parsed?.value !== "string") return null;
@@ -858,7 +857,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     const label = entry.kind === "income" ? "Receita" : "Despesa";
     answer = `✅ <b>${label} registrada</b>\nValor: <b>${entry.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\nDescrição: ${escapeHtml(entry.description)}\n\nCategoria automática: ${escapeHtml(category.name)} ${category.icon}.${budgetNotice}`;
   } else if (/^\/(start|ajuda|help)\b/i.test(text.trim())) {
-    answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nConverse comigo normalmente. Eu registro receitas e despesas, acompanho seus orçamentos, consulto seu saldo e crio lembretes e lançamentos recorrentes.\n\nVocê pode dizer:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Todo mês pago 1.200 de aluguel";
+    answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nConverse comigo normalmente. Eu registro receitas e despesas, acompanho seus orçamentos, consulto seu saldo e crio lembretes e lançamentos recorrentes.\n\nVocê pode dizer:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Todo mês pago 1.200 de aluguel\n\n🔒 Quando a IA estiver ativada, mensagens e áudios podem ser processados pelo Google Gemini para gerar respostas. Evite enviar senhas ou dados bancários completos.";
   } else {
     answer = "Ainda não consegui entender esse pedido com segurança.\n\nPode falar comigo de forma natural, por exemplo:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• Como estão minhas finanças este mês?\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Defina meu orçamento de alimentação em 500 reais\n\nPara editar ou apagar um lançamento, também pode pedir isso em palavras. Antes de excluir, vou pedir confirmação.";
   }
