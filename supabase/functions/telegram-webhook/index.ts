@@ -43,7 +43,7 @@ function parseEntry(text: string): { kind: "income" | "expense"; amount: number;
   if (!amount) return null;
   const description = text.replace(match[0], " ")
     .replace(/\b(recebi|ganhei|salário|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou|gastei|paguei|comprei|despesa|conta de|debitei|passei no cartao)\b/ig, " ")
-    .replace(/\b(?:reais?|real|foi|deu|hoje|ontem|na|no|um|uma|de|do|da|por)\b/ig, " ")
+    .replace(/\b(?:reais?|real|foi|deu|hoje|ontem|na|no|um|uma|de|do|da|por|conta)\b/ig, " ")
     .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "") ||
     (kind === "income" ? "Receita" : "Despesa");
   return { kind, amount, description: description.slice(0, 180) };
@@ -305,7 +305,7 @@ function naturalRecurringCommand(raw: string, normalized: string): string | null
   const cue = /\b(?:todo|toda|todos|todas)\s+(?:a\s+)?(?:semana|mes|ano)\b|\b(?:a cada|semanalmente|mensalmente|anualmente|recorrente|recorrencia)\b/.test(normalized);
   if (!cue) return null;
   const amounts = [...raw.matchAll(/(?<![\d.,])(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?(?![\d.,])/gi)];
-  if (!amounts.length) return null;
+  if (!amounts.length) return "/recorrente";
   const amountMatch = amounts[amounts.length - 1];
   const amount = amountMatch[0].replace(/^R\$/i, "").replace(/\s/g, "");
   const frequency: "weekly" | "monthly" | "yearly" = /\b(?:semana|semanalmente)\b/.test(normalized) ? "weekly" : /\b(?:ano|anualmente|anual)\b/.test(normalized) ? "yearly" : "monthly";
@@ -314,7 +314,7 @@ function naturalRecurringCommand(raw: string, normalized: string): string | null
     .replace(/\b(?:todo|toda|todos|todas)\s+(?:a\s+)?(?:semana|m[eê]s|mes|ano)\b/ig, " ")
     .replace(/\b(?:a cada|semanalmente|mensalmente|anualmente|semanal|mensal|anual|recorrente|recorrência|recorrencia)\b/ig, " ")
     .replace(/\b(?:por favor|quero|preciso|crie|criar|registre|registrar|lance|lançar|lancar|programe|programar|automaticamente|receita|despesa|recebo|receber|ganho|ganhar|entrou|caiu|cai|vendi|vender|faturei|pago|pagar|pagarei|paguei|pague|gasto|gastar|desconto|cobrado|cobrada)\b/ig, " ")
-    .replace(/\b(?:reais?|de|do|da|para|por|no|na|em|com|todo|toda|meu|minha|um|uma)\b/ig, " ")
+    .replace(/\b(?:reais?|de|do|da|para|por|no|na|em|com|todo|toda|meu|minha|um|uma|que)\b/ig, " ")
     .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "").slice(0, 180);
   if (!description) description = kind === "receita" ? "Receita recorrente" : "Despesa recorrente";
   const label = frequency === "weekly" ? "semanal" : frequency === "yearly" ? "anual" : "mensal";
@@ -325,7 +325,7 @@ function naturalBudgetCommand(raw: string, normalized: string): string | null {
   const intent = /\b(?:orcamento|orcamentos|limite de gastos?|limitar gastos?|gastar no maximo|gastar ate|teto de gastos?)\b/.test(normalized);
   if (!intent) return null;
   const amounts = [...raw.matchAll(/(?<![\d.,])(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?(?![\d.,])/gi)];
-  if (!amounts.length) return null;
+  if (!amounts.length) return "/orcamento";
   const amountMatch = amounts[amounts.length - 1];
   const amount = amountMatch[0].replace(/^R\$/i, "").replace(/\s/g, "");
   const category = raw.replace(amountMatch[0], " ")
@@ -417,7 +417,7 @@ async function sendText(chatId: number, userId: string, text: string) {
   } else if (pendingEditValid && !text.trim().startsWith("/")) {
     const details = parseEditDetails(text);
     if (!details) {
-      answer = "Não consegui identificar o novo valor e a descrição. Envie, por exemplo: <b>35,90 almoço e café</b>. Para desistir, use /cancelar.";
+      answer = "Não consegui identificar o novo valor e a descrição. Envie, por exemplo: <b>35,90 almoço e café</b>. Para desistir, diga <b>“cancelar”</b>.";
     } else {
       const updated = await db(`transactions?id=eq.${encodeURIComponent(pendingEdit!.id!)}&user_id=eq.${encodeURIComponent(userId)}`, {
         method: "PATCH", headers: { Prefer: "return=representation" },
@@ -434,7 +434,7 @@ async function sendText(chatId: number, userId: string, text: string) {
   } else if (pendingEdit && !pendingEditValid && !text.trim().startsWith("/")) {
     delete editPreferences.pending_transaction_edit;
     await writePreferences(userId, editPreferences);
-    answer = "⌛ A edição expirou. Envie /editar para começar novamente.";
+    answer = "⌛ A edição expirou. Peça para editar o lançamento novamente em linguagem natural.";
   } else if (/^\/confirmar\b/i.test(text.trim())) {
     const preferences = await readPreferences(userId);
     const pending = preferences.pending_transaction_delete as { id?: string; created_at?: string } | undefined;
@@ -442,7 +442,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     if (!pending?.id || !createdAt || Date.now() - createdAt > 10 * 60 * 1000) {
       delete preferences.pending_transaction_delete;
       await writePreferences(userId, preferences);
-      answer = "⌛ Não há exclusão pendente válida. Envie /excluir para começar novamente.";
+      answer = "⌛ Não há exclusão pendente válida. Diga que deseja excluir um lançamento para começar novamente.";
     } else {
       const removed = await db(`transactions?id=eq.${encodeURIComponent(pending.id)}&user_id=eq.${encodeURIComponent(userId)}`, {
         method: "DELETE", headers: { Prefer: "return=representation" },
@@ -466,14 +466,14 @@ async function sendText(chatId: number, userId: string, text: string) {
         rows.map((row, i) => `${i + 1}. ${row.kind === "income" ? "🟢 Receita" : "🔴 Despesa"} · <b>${money(Number(row.amount) || 0)}</b>\n   ${escapeHtml(row.description || "Sem descrição")} · ${new Date(row.occurred_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" })}`).join("\n\n") +
         "\n\nDiga <b>“editar lançamento 1”</b> para escolher. Depois, envie o novo valor e a descrição, por exemplo <code>35,90 almoço e café</code>. A edição expira em 10 minutos. Diga <b>“cancelar”</b> para desistir.";
     } else if (index < 1 || index > rows.length) {
-      answer = `Escolha um número entre 1 e ${rows.length}. Envie /editar para ver a lista novamente.`;
+      answer = `Escolha um número entre 1 e ${rows.length}. Diga “editar lançamento 1” para ver a lista novamente.`;
     } else {
       const chosen = rows[index - 1];
       const preferences = await readPreferences(userId);
       delete preferences.pending_transaction_delete;
       preferences.pending_transaction_edit = { id: chosen.id, created_at: new Date().toISOString() };
       await writePreferences(userId, preferences);
-      answer = `✏️ <b>Editar lançamento</b>\n\nAtual: <b>${money(Number(chosen.amount) || 0)}</b> · ${escapeHtml(chosen.description || "Sem descrição")}\n\nEnvie o novo valor e a descrição, por exemplo <code>35,90 almoço e café</code>. Para manter o lançamento atual, envie /cancelar.`;
+      answer = `✏️ <b>Editar lançamento</b>\n\nAtual: <b>${money(Number(chosen.amount) || 0)}</b> · ${escapeHtml(chosen.description || "Sem descrição")}\n\nEnvie o novo valor e a descrição, por exemplo <code>35,90 almoço e café</code>. Para manter o lançamento atual, diga “cancelar”.`;
     }
   } else if (/^\/excluir(?:\s+(\d+))?\s*$/i.test(text.trim())) {
     const match = text.trim().match(/^\/excluir(?:\s+(\d+))?\s*$/i);
@@ -486,7 +486,7 @@ async function sendText(chatId: number, userId: string, text: string) {
         rows.map((row, i) => `${i + 1}. ${row.kind === "income" ? "🟢 Receita" : "🔴 Despesa"} · <b>${money(Number(row.amount) || 0)}</b>\n   ${escapeHtml(row.description || "Sem descrição")} · ${new Date(row.occurred_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" })}`).join("\n\n") +
         "\n\nDiga <b>“excluir lançamento 1”</b> para selecionar um item. Eu sempre pedirei confirmação antes de apagar. Para desistir, diga <b>“cancelar”</b>.";
     } else if (index < 1 || index > rows.length) {
-      answer = `Escolha um número entre 1 e ${rows.length}. Envie /excluir para ver a lista novamente.`;
+      answer = `Escolha um número entre 1 e ${rows.length}. Diga “excluir lançamento 1” para ver a lista novamente.`;
     } else {
       const chosen = rows[index - 1];
       const preferences = await readPreferences(userId);
@@ -498,12 +498,12 @@ async function sendText(chatId: number, userId: string, text: string) {
     const raw = text.trim().replace(/^\/orcamento\s*/i, "").trim();
     const amountMatch = raw.match(/(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?\s*$/i);
     if (!raw || !amountMatch) {
-      answer = "🎯 <b>Definir orçamento mensal</b>\nUse: <code>/orcamento alimentação 500</code>\nA categoria pode ser Alimentação, Moradia, Contas, Transporte, Saúde, Lazer, Compras ou outra que você queira criar.";
+      answer = "🎯 <b>Definir orçamento mensal</b>\nDiga, por exemplo: <b>Defina meu orçamento de alimentação em 500 reais</b>. Informe a categoria e o limite mensal.";
     } else {
       const amount = parseMoney(amountMatch[0].replace(/^R\$/i, "").trim());
       const rawCategory = raw.slice(0, amountMatch.index).trim();
       if (!amount || !rawCategory) {
-        answer = "Não consegui entender. Exemplo: <code>/orcamento alimentação 500</code>.";
+        answer = "Não consegui entender o limite. Diga, por exemplo: <b>Defina meu orçamento de alimentação em 500 reais</b>.";
       } else {
         const category = requestedCategory(rawCategory);
         const categoryId = await getOrCreateCategory(userId, category, "expense");
@@ -520,7 +520,7 @@ async function sendText(chatId: number, userId: string, text: string) {
           const created = await db("budgets", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(payload) });
           if (!created.ok) throw new Error("Could not create monthly budget");
         }
-        answer = `✅ <b>Orçamento mensal definido</b>\nCategoria: ${escapeHtml(category.name)}\nLimite: <b>${money(amount)}</b>\n\nUse /orcamentos para acompanhar quanto já foi gasto.`;
+        answer = `✅ <b>Orçamento mensal definido</b>\nCategoria: ${escapeHtml(category.name)}\nLimite: <b>${money(amount)}</b> por mês.\n\nDepois, pergunte: <b>Como está meu orçamento?</b>`;
       }
     }
   } else if (/^\/orcamentos\b/i.test(text.trim())) {
@@ -533,7 +533,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     const expenses = new Map<string, number>();
     for (const row of rows) if (row.kind === "expense" && row.category_id) expenses.set(row.category_id, (expenses.get(row.category_id) || 0) + Number(row.amount || 0));
     if (!budgets.length) {
-      answer = "🎯 <b>Você ainda não definiu orçamentos.</b>\n\nExemplo: <code>/orcamento alimentação 500</code>\nDepois, use /orcamentos para acompanhar o mês.";
+      answer = "🎯 <b>Você ainda não definiu orçamentos.</b>\nDiga, por exemplo: <b>Defina meu orçamento de alimentação em 500 reais</b>. Depois, pergunte como está seu orçamento.";
     } else {
       const lines = budgets.map((b: any) => {
         const spent = expenses.get(b.category_id) || 0;
@@ -582,7 +582,7 @@ async function sendText(chatId: number, userId: string, text: string) {
   } else if (/^\/recorrente(?:\s+.*)?$/i.test(text.trim())) {
     const match = text.trim().match(/^\/recorrente\s+(receita|despesa)\s+(\S+)\s+(.+?)\s+(semanal|mensal|anual)\s+(\d{4}-\d{2}-\d{2})$/i);
     if (!match) {
-      answer = "🔁 <b>Criar lançamento recorrente</b>\nUse: <code>/recorrente despesa 120 aluguel mensal 2026-11-05</code>\nFrequência: semanal, mensal ou anual. A data é a próxima execução.";
+      answer = "🔁 <b>Criar lançamento recorrente</b>\nDiga, por exemplo: <b>Todo mês pago 1.200 de aluguel</b> ou <b>Toda semana gasto 75 com feira</b>. Informe valor, descrição e frequência.";
     } else {
       const kind = match[1].toLocaleLowerCase("pt-BR") === "receita" ? "income" : "expense";
       const amount = parseMoney(match[2]);
@@ -608,13 +608,13 @@ async function sendText(chatId: number, userId: string, text: string) {
     const rows = await response.json();
     answer = Array.isArray(rows) && rows.length
       ? "🔁 <b>Seus lançamentos recorrentes</b>\n\n" + rows.map((r: any, i: number) => (i + 1) + ". " + (r.active ? "🟢" : "⏸️") + " <b>" + money(Number(r.amount) || 0) + "</b> · " + (r.kind === "income" ? "Receita" : "Despesa") + "\n   " + escapeHtml(r.description) + " · " + (({weekly:"semanal",monthly:"mensal",yearly:"anual"} as Record<string,string>)[r.frequency] || r.frequency) + "\n   Próxima: " + new Date(r.next_run_at + "T12:00:00Z").toLocaleDateString("pt-BR", {timeZone:"UTC"})).join("\n\n") + "\n\nPara pausar, diga <b>“pausar recorrência 1”</b> (número da lista)."
-      : "Você ainda não tem recorrências. Exemplo: <code>/recorrente despesa 120 aluguel mensal 2026-11-05</code>";
+      : "Você ainda não tem lançamentos recorrentes. Diga, por exemplo: <b>Todo mês pago 1.200 de aluguel</b>.";
   } else if (/^\/pausarrecorrente\s+\d+\s*$/i.test(text.trim())) {
     const index = Number(text.trim().match(/^\/pausarrecorrente\s+(\d+)/i)?.[1] || 0);
     const listed = await db("recurring_rules?user_id=eq." + encodeURIComponent(userId) + "&select=id,description,amount,active&order=next_run_at.asc&limit=20");
     if (!listed.ok) throw new Error("Could not list recurring rules");
     const rows = await listed.json();
-    if (!index || index > rows.length) answer = "Número inválido. Envie /recorrentes para ver a lista.";
+    if (!index || index > rows.length) answer = "Número inválido. Peça para ver seus lançamentos recorrentes novamente.";
     else if (!rows[index - 1].active) answer = "Essa recorrência já está pausada.";
     else {
       const item = rows[index - 1];
@@ -646,13 +646,13 @@ async function sendText(chatId: number, userId: string, text: string) {
     const rows = await response.json();
     answer = Array.isArray(rows) && rows.length
       ? "⏰ <b>Seus lembretes pendentes</b>\n\n" + rows.map((r: any, i: number) => (i + 1) + ". <b>" + escapeHtml(r.title) + "</b>\n   " + new Date(r.remind_at).toLocaleString("pt-BR", {timeZone:"America/Fortaleza"})).join("\n\n")
-      : "📭 Você não tem lembretes pendentes. Crie um com <code>/lembrete 2026-11-05 09:00 pagar conta</code>.";
+      : "📭 Você não tem lembretes pendentes. Diga, por exemplo: <b>Me lembre amanhã às 9 de pagar a conta</b>.";
   } else if (/^\/cancelarlembrete\s+\d+\s*$/i.test(text.trim())) {
     const index = Number(text.trim().match(/^\/cancelarlembrete\s+(\d+)/i)?.[1] || 0);
     const listed = await db("reminders?user_id=eq." + encodeURIComponent(userId) + "&status=eq.pending&select=id,title,remind_at&order=remind_at.asc&limit=20");
     if (!listed.ok) throw new Error("Could not list reminders");
     const rows = await listed.json();
-    if (!index || index > rows.length) answer = "Número inválido. Envie /lembretes para ver os lembretes pendentes.";
+    if (!index || index > rows.length) answer = "Número inválido. Peça para ver seus lembretes pendentes novamente.";
     else {
       const item = rows[index - 1];
       const updated = await db("reminders?id=eq." + encodeURIComponent(item.id) + "&user_id=eq." + encodeURIComponent(userId) + "&status=eq.pending", {method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({status:"cancelled"})});
