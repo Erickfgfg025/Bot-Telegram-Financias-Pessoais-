@@ -64,10 +64,10 @@ function escapeHtml(text: string) {
 function money(value: number) {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
-type TransactionRow = { id: string; kind: string; amount: number | string; description: string | null; occurred_at: string };
+type TransactionRow = { id: string; kind: string; amount: number | string; description: string | null; occurred_at: string; category_id?: string | null };
 async function getTransactions(userId: string, options: { from?: string; to?: string; limit?: number } = {}): Promise<TransactionRow[]> {
   const params = new URLSearchParams({
-    select: "id,kind,amount,description,occurred_at",
+    select: "id,kind,amount,description,occurred_at,category_id",
     user_id: `eq.${userId}`,
     order: "occurred_at.desc",
     limit: String(options.limit ?? 1000),
@@ -105,6 +105,83 @@ function monthRange() {
   const start = `${year}-${String(month).padStart(2, "0")}-01T00:00:00-03:00`;
   const end = `${nextYear}-${String(nextMonth).padStart(2, "0")}-01T00:00:00-03:00`;
   return { start, end, label: new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }) };
+}
+function normalizeText(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR").trim();
+}
+function categoryGuess(description: string, kind: "income" | "expense"): { name: string; icon: string } {
+  const text = normalizeText(description);
+  if (kind === "income") {
+    if (/\b(salario|pagamento|folha)\b/.test(text)) return { name: "Salário", icon: "💵" };
+    if (/\b(freela|freelance|bico|servico)\b/.test(text)) return { name: "Trabalho extra", icon: "🧰" };
+    if (/\b(venda|vendi)\b/.test(text)) return { name: "Vendas", icon: "🛍️" };
+    if (/\b(dividendo|rendimento|investimento|juros)\b/.test(text)) return { name: "Investimentos", icon: "📈" };
+    return { name: "Outras receitas", icon: "🟢" };
+  }
+  if (/\b(almoco|jantar|cafe|restaurante|lanche|mercado|supermercado|padaria|ifood|comida|feira)\b/.test(text)) return { name: "Alimentação", icon: "🍽️" };
+  if (/\b(aluguel|condominio|moradia|moveis|reparo|reforma)\b/.test(text)) return { name: "Moradia", icon: "🏠" };
+  if (/\b(luz|energia|agua|internet|telefone|celular|gas|conta de)\b/.test(text)) return { name: "Contas", icon: "🧾" };
+  if (/\b(uber|99|gasolina|combustivel|onibus|passagem|estacionamento|transporte)\b/.test(text)) return { name: "Transporte", icon: "🚗" };
+  if (/\b(farmacia|remedio|consulta|medico|dentista|saude)\b/.test(text)) return { name: "Saúde", icon: "💊" };
+  if (/\b(cinema|jogo|steam|netflix|spotify|show|bar|viagem|passeio|lazer)\b/.test(text)) return { name: "Lazer", icon: "🎮" };
+  if (/\b(roupa|calcado|sapato|shopping|eletronico|compras)\b/.test(text)) return { name: "Compras", icon: "🛍️" };
+  if (/\b(curso|livro|faculdade|escola|mensalidade|educacao)\b/.test(text)) return { name: "Educação", icon: "📚" };
+  return { name: "Outros gastos", icon: "📦" };
+}
+function requestedCategory(raw: string): { name: string; icon: string } {
+  const normalized = normalizeText(raw);
+  const aliases: Record<string, { name: string; icon: string }> = {
+    alimentacao: { name: "Alimentação", icon: "🍽️" }, comida: { name: "Alimentação", icon: "🍽️" }, mercado: { name: "Alimentação", icon: "🍽️" },
+    moradia: { name: "Moradia", icon: "🏠" }, aluguel: { name: "Moradia", icon: "🏠" },
+    contas: { name: "Contas", icon: "🧾" }, luz: { name: "Contas", icon: "🧾" }, transporte: { name: "Transporte", icon: "🚗" },
+    saude: { name: "Saúde", icon: "💊" }, lazer: { name: "Lazer", icon: "🎮" }, compras: { name: "Compras", icon: "🛍️" },
+    educacao: { name: "Educação", icon: "📚" }, outros: { name: "Outros gastos", icon: "📦" },
+  };
+  if (aliases[normalized]) return aliases[normalized];
+  const clean = raw.trim().replace(/\s+/g, " ");
+  return { name: clean.charAt(0).toLocaleUpperCase("pt-BR") + clean.slice(1), icon: "📦" };
+}
+async function getOrCreateCategory(userId: string, category: { name: string; icon: string }, kind: "income" | "expense"): Promise<string> {
+  const params = new URLSearchParams({ select: "id", user_id: `eq.${userId}`, name: `eq.${category.name}`, kind: `eq.${kind}`, limit: "1" });
+  const found = await db(`categories?${params.toString()}`);
+  if (!found.ok) throw new Error("Could not find financial category");
+  const rows = await found.json();
+  if (Array.isArray(rows) && rows[0]?.id) return rows[0].id;
+  const created = await db("categories?on_conflict=user_id,name,kind", {
+    method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify({ user_id: userId, name: category.name, kind, icon: category.icon }),
+  });
+  if (!created.ok) throw new Error("Could not create financial category");
+  const createdRows = await created.json();
+  if (Array.isArray(createdRows) && createdRows[0]?.id) return createdRows[0].id;
+  const retry = await db(`categories?${params.toString()}`);
+  if (!retry.ok) throw new Error("Could not retrieve financial category");
+  const retryRows = await retry.json();
+  if (!Array.isArray(retryRows) || !retryRows[0]?.id) throw new Error("Financial category id was not returned");
+  return retryRows[0].id;
+}
+function localToday() {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Fortaleza", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  return `${parts.find(p => p.type === "year")?.value}-${parts.find(p => p.type === "month")?.value}-${parts.find(p => p.type === "day")?.value}`;
+}
+async function backfillCategories(userId: string, from: string, to: string) {
+  const rows = await getTransactions(userId, { from, to, limit: 1000 });
+  for (const row of rows) {
+    if (row.category_id || (row.kind !== "income" && row.kind !== "expense")) continue;
+    const category = categoryGuess(row.description || "", row.kind);
+    const categoryId = await getOrCreateCategory(userId, category, row.kind);
+    const response = await db(`transactions?id=eq.${encodeURIComponent(row.id)}&user_id=eq.${encodeURIComponent(userId)}&category_id=is.null`, {
+      method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ category_id: categoryId }),
+    });
+    if (!response.ok) throw new Error("Could not categorize existing transaction");
+  }
+}
+async function listBudgets(userId: string) {
+  const response = await db(`budgets?user_id=eq.${encodeURIComponent(userId)}&period=eq.monthly&select=id,name,amount,category_id,starts_on,ends_on&order=created_at.desc`);
+  if (!response.ok) throw new Error("Could not read monthly budgets");
+  const rows = await response.json();
+  const today = localToday();
+  return (Array.isArray(rows) ? rows : []).filter((b: any) => b.starts_on <= today && (!b.ends_on || b.ends_on >= today));
 }
 function totals(rows: TransactionRow[]) {
   let income = 0, expense = 0;
@@ -214,6 +291,64 @@ async function sendText(chatId: number, userId: string, text: string) {
       await writePreferences(userId, preferences);
       answer = `⚠️ <b>Confirme a exclusão</b>\n\n${chosen.kind === "income" ? "Receita" : "Despesa"}: <b>${money(Number(chosen.amount) || 0)}</b>\nDescrição: ${escapeHtml(chosen.description || "Sem descrição")}\n\nEnvie <code>/confirmar</code> para excluir este lançamento ou <code>/cancelar</code> para manter.`;
     }
+  } else if (/^\/orcamento(?:\s+.+)?$/i.test(text.trim())) {
+    const raw = text.trim().replace(/^\/orcamento\s*/i, "").trim();
+    const amountMatch = raw.match(/(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?\s*$/i);
+    if (!raw || !amountMatch) {
+      answer = "🎯 <b>Definir orçamento mensal</b>\\nUse: <code>/orcamento alimentação 500</code>\\nA categoria pode ser Alimentação, Moradia, Contas, Transporte, Saúde, Lazer, Compras ou outra que você queira criar.";
+    } else {
+      const amount = parseMoney(amountMatch[0].replace(/^R\$/i, "").trim());
+      const rawCategory = raw.slice(0, amountMatch.index).trim();
+      if (!amount || !rawCategory) {
+        answer = "Não consegui entender. Exemplo: <code>/orcamento alimentação 500</code>.";
+      } else {
+        const category = requestedCategory(rawCategory);
+        const categoryId = await getOrCreateCategory(userId, category, "expense");
+        const active = await listBudgets(userId);
+        const existing = active.find((b: any) => b.category_id === categoryId);
+        const range = monthRange();
+        const payload = { user_id: userId, category_id: categoryId, name: category.name, amount, period: "monthly", starts_on: range.start.slice(0, 10), ends_on: null };
+        if (existing) {
+          const updated = await db(`budgets?id=eq.${encodeURIComponent(existing.id)}&user_id=eq.${encodeURIComponent(userId)}`, {
+            method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ amount, name: category.name, starts_on: range.start.slice(0, 10), ends_on: null }),
+          });
+          if (!updated.ok) throw new Error("Could not update monthly budget");
+        } else {
+          const created = await db("budgets", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(payload) });
+          if (!created.ok) throw new Error("Could not create monthly budget");
+        }
+        answer = `✅ <b>Orçamento mensal definido</b>\\nCategoria: ${escapeHtml(category.name)}\\nLimite: <b>${money(amount)}</b>\\n\\nUse /orcamentos para acompanhar quanto já foi gasto.`;
+      }
+    }
+  } else if (/^\/orcamentos\b/i.test(text.trim())) {
+    const range = monthRange();
+    await backfillCategories(userId, range.start, range.end);
+    const [budgets, rows] = await Promise.all([
+      listBudgets(userId),
+      getTransactions(userId, { from: range.start, to: range.end, limit: 1000 }),
+    ]);
+    const expenses = new Map<string, number>();
+    for (const row of rows) if (row.kind === "expense" && row.category_id) expenses.set(row.category_id, (expenses.get(row.category_id) || 0) + Number(row.amount || 0));
+    if (!budgets.length) {
+      answer = "🎯 <b>Você ainda não definiu orçamentos.</b>\\n\\nExemplo: <code>/orcamento alimentação 500</code>\\nDepois, use /orcamentos para acompanhar o mês.";
+    } else {
+      const lines = budgets.map((b: any) => {
+        const spent = expenses.get(b.category_id) || 0;
+        const limit = Number(b.amount) || 0;
+        const percent = limit > 0 ? Math.round(spent / limit * 100) : 0;
+        const remaining = limit - spent;
+        const status = percent >= 100 ? "🚨 Limite atingido" : percent >= 80 ? "⚠️ Perto do limite" : "✅ Dentro do limite";
+        return `• <b>${escapeHtml(b.name)}</b>\\n  Gasto: ${money(spent)} de ${money(limit)} (${percent}%)\\n  ${remaining >= 0 ? "Restam " + money(remaining) : "Excedido em " + money(Math.abs(remaining))} · ${status}`;
+      });
+      answer = `🎯 <b>Orçamentos de ${escapeHtml(range.label)}</b>\\n\\n${lines.join("\\n\\n")}\\n\\n<i>Os gastos são calculados a partir dos lançamentos categorizados do mês.</i>`;
+    }
+  } else if (/^\/categorias\b/i.test(text.trim())) {
+    const response = await db(`categories?user_id=eq.${encodeURIComponent(userId)}&select=name,kind,icon&order=kind,name`);
+    if (!response.ok) throw new Error("Could not read categories");
+    const rows = await response.json();
+    answer = Array.isArray(rows) && rows.length
+      ? "🏷️ <b>Suas categorias</b>\\n\\n" + rows.map((c: any) => `${c.icon || "📁"} ${escapeHtml(c.name)} · ${c.kind === "income" ? "Receita" : "Despesa"}`).join("\\n")
+      : "Ainda não há categorias. Elas serão criadas automaticamente quando você registrar receitas e despesas.";
   } else if (/^\/saldo\b/i.test(text.trim())) {
     const rows = await getTransactions(userId);
     const t = totals(rows);
@@ -236,17 +371,19 @@ async function sendText(chatId: number, userId: string, text: string) {
       answer = `🧾 <b>Seus últimos lançamentos</b>\n\n${lines.join("\n\n")}`;
     }
   } else if (entry) {
+    const category = categoryGuess(entry.description, entry.kind);
+    const categoryId = await getOrCreateCategory(userId, category, entry.kind);
     const insert = await db("transactions", {
       method: "POST", headers: { Prefer: "return=representation" },
-      body: JSON.stringify({ user_id: userId, kind: entry.kind, amount: entry.amount, currency: "BRL", description: entry.description, source: "telegram" }),
+      body: JSON.stringify({ user_id: userId, kind: entry.kind, amount: entry.amount, currency: "BRL", description: entry.description, category_id: categoryId, source: "telegram" }),
     });
     if (!insert.ok) throw new Error("Could not save financial transaction");
     const label = entry.kind === "income" ? "Receita" : "Despesa";
     answer = `✅ <b>${label} registrada</b>\nValor: <b>${entry.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\nDescrição: ${escapeHtml(entry.description)}\n\nVersão inicial: conta e categoria ainda não foram associadas.`;
   } else if (/^\/(start|ajuda|help)\b/i.test(text.trim())) {
-    answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nPosso começar registrando receitas e despesas por texto. Exemplos:\n• Gastei 25,90 no almoço\n• Paguei 120 conta de luz\n• Recebi 200 de um freela\n\nRelatórios, voz, memória semântica e outros recursos ainda estão em implementação.";
+    answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nPosso começar registrando receitas e despesas por texto. Exemplos:\n• Gastei 25,90 no almoço\n• Paguei 120 conta de luz\n• Recebi 200 de um freela\n\nComandos: /saldo, /resumo, /ultimas, /editar, /excluir, /orcamento, /orcamentos e /categorias.";
   } else {
-    answer = "Ainda não consegui identificar um lançamento com segurança.\n\nTente: <b>Gastei 25,90 no almoço</b> ou <b>Recebi 200 de um freela</b>. Consultas: /saldo, /resumo e /ultimas. Para excluir com segurança, use /excluir, selecione um item e confirme com /confirmar.";
+    answer = "Ainda não consegui identificar um lançamento com segurança.\n\nTente: <b>Gastei 25,90 no almoço</b> ou <b>Recebi 200 de um freela</b>. Comandos: /saldo, /resumo, /ultimas, /orcamento, /orcamentos, /categorias, /editar e /excluir.";
   }
   const savedAssistant = await db("conversation_messages", {
     method: "POST", headers: { Prefer: "return=minimal" },
