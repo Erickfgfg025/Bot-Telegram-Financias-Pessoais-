@@ -43,6 +43,7 @@ function parseEntry(text: string): { kind: "income" | "expense"; amount: number;
   if (!amount) return null;
   const description = text.replace(match[0], " ")
     .replace(/\b(recebi|ganhei|salário|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou|gastei|paguei|comprei|despesa|conta de|debitei|passei no cartao)\b/ig, " ")
+    .replace(/\b(?:reais?|real|foi|deu|hoje|ontem|na|no|um|uma|de|do|da|por)\b/ig, " ")
     .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "") ||
     (kind === "income" ? "Receita" : "Despesa");
   return { kind, amount, description: description.slice(0, 180) };
@@ -286,13 +287,13 @@ function naturalReminderCommand(raw: string, normalized: string): string | null 
     .replace(/^(?:por favor[, ]*)?(?:(?:quero|crie|criar|adicione|adicionar|agende|agendar)\s+(?:um\s+)?lembrete|(?:me\s+)?(?:lembre|lembra|lembrar|avise|avisa)(?:-me)?)\s*/i, "")
     .replace(/^(?:de|para|pra|que|um|uma)\s+/i, "")
     .replace(/\b(?:daqui\s+a|em)\s+\d+\s+(?:minutos?|mins?|horas?|dias?|semanas?)\b/ig, " ")
-    .replace(/\b(?:depois\s+de\s+amanh[ãa]|amanh[ãa]|hoje)\b/ig, " ")
+    .replace(/(?:depois\s+de\s+amanh[ãa]|amanh[ãa]|hoje)/ig, " ")
     .replace(/\b(?:dia\s+)?\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/g, " ")
     .replace(/\b20\d{2}-\d{2}-\d{2}\b/g, " ")
-    .replace(/\b(?:às|as)\s*\d{1,2}(?:(?::|h)\d{2})?\s*(?:horas?|h)?\b/ig, " ")
+    .replace(/(?:às|as)\s*\d{1,2}(?:(?::|h)\d{2})?\s*(?:horas?|h)?/ig, " ")
     .replace(/\b\d{1,2}h(?:\d{2})?\b/ig, " ")
-    .replace(/\b(?:da|de|pela)\s+(?:manhã|manha|tarde|noite)\b/ig, " ")
-    .replace(/\b(?:domingo|segunda|terça|terca|quarta|quinta|sexta|sábado|sabado)(?:-feira)?\b/ig, " ")
+    .replace(/\b(?:da|de|pela)\s+(?:manhã|manha|tarde|noite)/ig, " ")
+    .replace(/\b(?:domingo|segunda|terça|terca|quarta|quinta|sexta|sábado|sabado)(?:-feira)?/ig, " ")
     .replace(/^[,;:\- ]+|[,;:\- ]+$/g, "")
     .replace(/^(?:de|para|pra|que|às|as|em)\s+/i, "")
     .replace(/\s+/g, " ").trim().slice(0, 180);
@@ -328,7 +329,7 @@ function naturalBudgetCommand(raw: string, normalized: string): string | null {
   const amountMatch = amounts[amounts.length - 1];
   const amount = amountMatch[0].replace(/^R\$/i, "").replace(/\s/g, "");
   const category = raw.replace(amountMatch[0], " ")
-    .replace(/\b(?:por favor|quero|preciso|defina|definir|crie|criar|coloque|configurar|configure|estabeleça|estabeleca|estabelecer|limite|limitar|meu|minha|mensal|mensalmente|orcamento|orçamento|orcamentos|orçamentos|gasto|gastos|gastar|maximo|ate|teto|reais?|valor|de|do|da|para|em|com|no|na|a|um|uma|por mes)\b/ig, " ")
+    .replace(/\b(?:por favor|quero|preciso|defina|definir|crie|criar|coloque|configurar|configure|estabeleça|estabeleca|estabelecer|limite|limitar|meu|minha|mensal|mensalmente|orcamento|orçamento|orcamentos|orçamentos|gasto|gastos|gastar|máximo|maximo|até|ate|teto|reais?|valor|de|do|da|para|em|com|no|na|a|um|uma|por mes)\b/ig, " ")
     .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "");
   if (!category) return null;
   return "/orcamento " + category + " " + amount;
