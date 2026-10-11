@@ -2,15 +2,25 @@
 
 A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como banco e backend. O projeto começa priorizando serviços gratuitos e não ativa recursos pagos automaticamente.
 
-## Funcionalidades planejadas
+## Funcionalidades disponíveis
 
-- Receitas, despesas e transferências.
-- Contas, categorias, orçamentos, metas, dívidas e pagamentos.
-- Lançamentos recorrentes, parcelamentos e lembretes.
-- Relatórios calculados a partir do PostgreSQL, nunca estimados pelo modelo de IA.
-- Conversa contextual, histórico recente, resumos e memória semântica com pgvector.
-- Entrada por texto primeiro; voz e provedores de IA serão etapas posteriores com fallback.
-- Isolamento por usuário e segredos somente no Supabase.
+- Registrar receitas e despesas por texto.
+- Categorizar lançamentos automaticamente por palavras-chave, com categorias por usuário.
+- Consultar saldo, resumo mensal e últimos lançamentos.
+- Editar lançamentos com /editar e /editar 1; a alteração expira em 10 minutos.
+- Excluir com confirmação usando /excluir, seleção do item e /confirmar.
+- Definir orçamento mensal por categoria com /orcamento alimentação 500.
+- Consultar progresso do orçamento com /orcamentos, incluindo aviso ao atingir 80% e 100% do limite.
+- Listar categorias com /categorias.
+- Histórico de mensagens e processamento idempotente de updates do Telegram.
+
+## Próximas etapas
+
+- Contas e transferências completas.
+- Metas, dívidas, pagamentos, recorrências e lembretes.
+- Relatórios mais detalhados e alertas proativos.
+- Conversa contextual avançada, memória semântica e entrada por voz.
+- Melhorias de interpretação de linguagem natural com fallback determinístico.
 
 ## Estado atual
 
@@ -18,8 +28,9 @@ A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como
 - Esquema inicial aplicado; 14 tabelas verificadas com RLS habilitado.
 - Edge Function telegram-webhook publicada.
 - O webhook ainda exige TELEGRAM_BOT_TOKEN e TELEGRAM_WEBHOOK_SECRET para processar mensagens.
-- A primeira versão do webhook reconhece alguns padrões simples de receita/despesa e comandos de ajuda. Não é ainda um assistente financeiro completo.
-- IA externa, embeddings ativos, voz, lembretes agendados e relatórios completos ainda não estão ativados.
+- Webhook ativo na versão 12.
+- O parser de lançamentos continua determinístico e baseado em padrões simples. Categorias automáticas também usam palavras-chave, então descrições ambíguas podem cair em “Outros gastos” ou “Outras receitas”.
+- Os orçamentos são consultados sob demanda com /orcamentos. Alertas automáticos por mensagem, voz, IA externa, embeddings ativos e lembretes agendados ainda não estão ativados.
 
 ## Configuração do webhook
 
@@ -27,8 +38,10 @@ A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como
 2. Não coloque tokens ou a chave service role no GitHub ou nesta conversa.
 3. URL da função: https://njyfrmvryigzgojyvgxt.supabase.co/functions/v1/telegram-webhook
 4. Configure o webhook do Telegram para essa URL, enviando o mesmo valor de TELEGRAM_WEBHOOK_SECRET como parâmetro secret_token.
-5. Teste /start e, em seguida, um lançamento pequeno como “Gastei 25,90 no almoço”.
-6. Se houver erro, consulte os logs da Edge Function antes de repetir lançamentos para evitar duplicações.
+5. Teste /start e registre um lançamento de teste como “Gastei 25,90 no almoço”.
+6. Confira /categorias; defina um limite com /orcamento alimentação 500 e consulte /orcamentos.
+7. Para editar, use /editar, escolha com /editar 1 e envie o novo valor e descrição. Para excluir, use /excluir e confirme com /confirmar.
+8. Se houver erro, consulte os logs da Edge Function antes de repetir lançamentos para evitar duplicações.
 
 A função usa verify_jwt=false porque o Telegram não envia um JWT Supabase. Ela valida o cabeçalho secreto x-telegram-bot-api-secret-token. Sem o secret configurado, responde 503 e não processa mensagens.
 
