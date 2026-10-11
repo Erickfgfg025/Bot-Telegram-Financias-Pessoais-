@@ -20,8 +20,9 @@ async function telegram(method: string, payload: Record<string, unknown>) {
   const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(`Telegram API returned ${response.status}`);
-  return await response.json();
+  const data = await response.json();
+  if (!response.ok || data?.ok !== true) throw new Error(`Telegram API send failed (HTTP ${response.status})`);
+  return data;
 }
 async function reply(chatId: number, text: string) {
   await telegram("sendMessage", { chat_id: chatId, text, parse_mode: "HTML" });
@@ -36,7 +37,7 @@ function parseEntry(text: string): { kind: "income" | "expense"; amount: number;
   const kind = /\b(recebi|ganhei|salário|salario|renda|vendi)\b/.test(lower) ? "income" :
     /\b(gastei|paguei|comprei|despesa|conta de)\b/.test(lower) ? "expense" : null;
   if (!kind) return null;
-  const match = text.match(/(?:R\$\s*)?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|(?:R\$\s*)?\d+(?:[.,]\d{1,2})?/i);
+  const match = text.match(/(?<![\d.,])(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?(?![\d.,])/i);
   if (!match) return null;
   const amount = parseMoney(match[0].replace(/^R\$/i, ""));
   if (!amount) return null;
