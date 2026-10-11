@@ -295,7 +295,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     const raw = text.trim().replace(/^\/orcamento\s*/i, "").trim();
     const amountMatch = raw.match(/(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?\s*$/i);
     if (!raw || !amountMatch) {
-      answer = "🎯 <b>Definir orçamento mensal</b>\\nUse: <code>/orcamento alimentação 500</code>\\nA categoria pode ser Alimentação, Moradia, Contas, Transporte, Saúde, Lazer, Compras ou outra que você queira criar.";
+      answer = "🎯 <b>Definir orçamento mensal</b>\nUse: <code>/orcamento alimentação 500</code>\nA categoria pode ser Alimentação, Moradia, Contas, Transporte, Saúde, Lazer, Compras ou outra que você queira criar.";
     } else {
       const amount = parseMoney(amountMatch[0].replace(/^R\$/i, "").trim());
       const rawCategory = raw.slice(0, amountMatch.index).trim();
@@ -317,7 +317,7 @@ async function sendText(chatId: number, userId: string, text: string) {
           const created = await db("budgets", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(payload) });
           if (!created.ok) throw new Error("Could not create monthly budget");
         }
-        answer = `✅ <b>Orçamento mensal definido</b>\\nCategoria: ${escapeHtml(category.name)}\\nLimite: <b>${money(amount)}</b>\\n\\nUse /orcamentos para acompanhar quanto já foi gasto.`;
+        answer = `✅ <b>Orçamento mensal definido</b>\nCategoria: ${escapeHtml(category.name)}\nLimite: <b>${money(amount)}</b>\n\nUse /orcamentos para acompanhar quanto já foi gasto.`;
       }
     }
   } else if (/^\/orcamentos\b/i.test(text.trim())) {
@@ -330,7 +330,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     const expenses = new Map<string, number>();
     for (const row of rows) if (row.kind === "expense" && row.category_id) expenses.set(row.category_id, (expenses.get(row.category_id) || 0) + Number(row.amount || 0));
     if (!budgets.length) {
-      answer = "🎯 <b>Você ainda não definiu orçamentos.</b>\\n\\nExemplo: <code>/orcamento alimentação 500</code>\\nDepois, use /orcamentos para acompanhar o mês.";
+      answer = "🎯 <b>Você ainda não definiu orçamentos.</b>\n\nExemplo: <code>/orcamento alimentação 500</code>\nDepois, use /orcamentos para acompanhar o mês.";
     } else {
       const lines = budgets.map((b: any) => {
         const spent = expenses.get(b.category_id) || 0;
@@ -338,16 +338,16 @@ async function sendText(chatId: number, userId: string, text: string) {
         const percent = limit > 0 ? Math.round(spent / limit * 100) : 0;
         const remaining = limit - spent;
         const status = percent >= 100 ? "🚨 Limite atingido" : percent >= 80 ? "⚠️ Perto do limite" : "✅ Dentro do limite";
-        return `• <b>${escapeHtml(b.name)}</b>\\n  Gasto: ${money(spent)} de ${money(limit)} (${percent}%)\\n  ${remaining >= 0 ? "Restam " + money(remaining) : "Excedido em " + money(Math.abs(remaining))} · ${status}`;
+        return `• <b>${escapeHtml(b.name)}</b>\n  Gasto: ${money(spent)} de ${money(limit)} (${percent}%)\n  ${remaining >= 0 ? "Restam " + money(remaining) : "Excedido em " + money(Math.abs(remaining))} · ${status}`;
       });
-      answer = `🎯 <b>Orçamentos de ${escapeHtml(range.label)}</b>\\n\\n${lines.join("\\n\\n")}\\n\\n<i>Os gastos são calculados a partir dos lançamentos categorizados do mês.</i>`;
+      answer = `🎯 <b>Orçamentos de ${escapeHtml(range.label)}</b>\n\n${lines.join("\n\n")}\n\n<i>Os gastos são calculados a partir dos lançamentos categorizados do mês.</i>`;
     }
   } else if (/^\/categorias\b/i.test(text.trim())) {
     const response = await db(`categories?user_id=eq.${encodeURIComponent(userId)}&select=name,kind,icon&order=kind,name`);
     if (!response.ok) throw new Error("Could not read categories");
     const rows = await response.json();
     answer = Array.isArray(rows) && rows.length
-      ? "🏷️ <b>Suas categorias</b>\\n\\n" + rows.map((c: any) => `${c.icon || "📁"} ${escapeHtml(c.name)} · ${c.kind === "income" ? "Receita" : "Despesa"}`).join("\\n")
+      ? "🏷️ <b>Suas categorias</b>\n\n" + rows.map((c: any) => `${c.icon || "📁"} ${escapeHtml(c.name)} · ${c.kind === "income" ? "Receita" : "Despesa"}`).join("\n")
       : "Ainda não há categorias. Elas serão criadas automaticamente quando você registrar receitas e despesas.";
   } else if (/^\/saldo\b/i.test(text.trim())) {
     const rows = await getTransactions(userId);
@@ -379,7 +379,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     });
     if (!insert.ok) throw new Error("Could not save financial transaction");
     const label = entry.kind === "income" ? "Receita" : "Despesa";
-    answer = `✅ <b>${label} registrada</b>\nValor: <b>${entry.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\nDescrição: ${escapeHtml(entry.description)}\n\nVersão inicial: conta e categoria ainda não foram associadas.`;
+    answer = `✅ <b>${label} registrada</b>\nValor: <b>${entry.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\nDescrição: ${escapeHtml(entry.description)}\n\nCategoria automática: ${escapeHtml(category.name)} ${category.icon}.`;
   } else if (/^\/(start|ajuda|help)\b/i.test(text.trim())) {
     answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nPosso começar registrando receitas e despesas por texto. Exemplos:\n• Gastei 25,90 no almoço\n• Paguei 120 conta de luz\n• Recebi 200 de um freela\n\nComandos: /saldo, /resumo, /ultimas, /editar, /excluir, /orcamento, /orcamentos e /categorias.";
   } else {
