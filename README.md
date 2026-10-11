@@ -2,42 +2,48 @@
 
 A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como banco e backend. O projeto começa priorizando serviços gratuitos e não ativa recursos pagos automaticamente.
 
-## O que a arquitetura prevê
+## Funcionalidades planejadas
 
-- Registro de receitas, despesas e transferências.
+- Receitas, despesas e transferências.
 - Contas, categorias, orçamentos, metas, dívidas e pagamentos.
 - Lançamentos recorrentes, parcelamentos e lembretes.
 - Relatórios calculados a partir do PostgreSQL, nunca estimados pelo modelo de IA.
 - Conversa contextual, histórico recente, resumos e memória semântica com pgvector.
-- Entrada por texto primeiro; voz e provedores de IA são etapas posteriores com fallback quando indisponíveis.
-- Isolamento por usuário, idempotência de atualizações do Telegram e segredos somente no Supabase.
+- Entrada por texto primeiro; voz e provedores de IA serão etapas posteriores com fallback.
+- Isolamento por usuário e segredos somente no Supabase.
 
 ## Estado atual
 
 - Projeto Supabase criado na região São Paulo.
-- Esquema inicial aplicado e tabelas verificadas.
-- O webhook ainda exige configuração dos segredos do Telegram antes de poder atender mensagens.
-- IA externa, embeddings, voz, lembretes agendados e relatórios completos ainda não estão ativados.
+- Esquema inicial aplicado; 14 tabelas verificadas com RLS habilitado.
+- Edge Function telegram-webhook publicada.
+- O webhook ainda exige TELEGRAM_BOT_TOKEN e TELEGRAM_WEBHOOK_SECRET para processar mensagens.
+- A primeira versão do webhook reconhece alguns padrões simples de receita/despesa e comandos de ajuda. Não é ainda um assistente financeiro completo.
+- IA externa, embeddings ativos, voz, lembretes agendados e relatórios completos ainda não estão ativados.
 
-## Configuração
+## Configuração do webhook
 
-1. Configure os segredos TELEGRAM_BOT_TOKEN e TELEGRAM_WEBHOOK_SECRET nas configurações de secrets das Edge Functions do Supabase.
-2. Confira se SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY estão disponíveis para a função no ambiente de execução. Nunca coloque a chave service role neste repositório.
-3. Faça deploy da função telegram-webhook.
-4. Configure o webhook do bot no Telegram usando a URL da função e o mesmo valor de TELEGRAM_WEBHOOK_SECRET no parâmetro secret_token.
-5. Teste primeiro com mensagens sem dados financeiros e depois com lançamentos pequenos.
+1. No Supabase, abra o projeto Iris e configure os secrets TELEGRAM_BOT_TOKEN e TELEGRAM_WEBHOOK_SECRET para Edge Functions.
+2. Não coloque tokens ou a chave service role no GitHub ou nesta conversa.
+3. URL da função: https://njyfrmvryigzgojyvgxt.supabase.co/functions/v1/telegram-webhook
+4. Configure o webhook do Telegram para essa URL, enviando o mesmo valor de TELEGRAM_WEBHOOK_SECRET como parâmetro secret_token.
+5. Teste /start e, em seguida, um lançamento pequeno como “Gastei 25,90 no almoço”.
+6. Se houver erro, consulte os logs da Edge Function antes de repetir lançamentos para evitar duplicações.
+
+A função usa verify_jwt=false porque o Telegram não envia um JWT Supabase. Ela valida o cabeçalho secreto x-telegram-bot-api-secret-token. Sem o secret configurado, responde 503 e não processa mensagens.
 
 ## Segurança
 
-- Não commite tokens, chaves, arquivos .env ou dados financeiros reais.
-- O acesso ao banco é feito no servidor com service role; não exponha essa chave no cliente.
-- A função valida o cabeçalho secreto enviado pelo Telegram.
-- A camada de linguagem não deve ser fonte de verdade para saldos ou totais.
+- Nunca commite tokens, chaves, arquivos .env ou dados financeiros reais.
+- O acesso ao banco é feito no servidor; a chave service role não deve ser exposta em clientes.
+- Todas as 14 tabelas iniciais têm RLS habilitado e não têm políticas de acesso público. O webhook usa acesso privilegiado somente no servidor.
+- O parser atual é determinístico e limitado. Não confie nele para interpretar pedidos complexos.
+- Totais e saldos futuros devem ser calculados no SQL/PostgreSQL, nunca inventados pelo modelo de linguagem.
 
 ## Banco
 
-A migration inicial está em supabase/migrations/20261011182819_iris_initial_schema.sql. As tabelas financeiras têm RLS habilitado e não recebem políticas de acesso público; o webhook usa acesso privilegiado exclusivamente no servidor.
+Migration: supabase/migrations/20261011182819_iris_initial_schema.sql
 
 ## Custo
 
-Meta inicial: R$ 0. O valor consultado para a criação do projeto foi US$ 0/mês. Limites dos planos gratuitos e de fornecedores externos podem mudar; não há autorização para upgrades pagos.
+Meta inicial: R$ 0. O valor consultado para a criação do projeto foi US$ 0/mês. Limites de planos gratuitos e de fornecedores externos podem mudar; não há autorização para upgrades pagos.
