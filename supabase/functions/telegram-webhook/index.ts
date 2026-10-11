@@ -290,12 +290,11 @@ async function transcribeTelegramAudio(fileId: string, suggestedMime: string): P
 function looksLikeMixedFinancialMessage(text: string): boolean {
   if (!parseEntry(text)) return false;
   const normalized = normalizeText(text);
-  const hasQuestionIntent = /\\b(?:o que|como|por que|porque|qual|quais|quem|onde|quando|me explica|explique|explica|me fale|fale sobre|gostaria de saber|pode explicar)\\b/.test(normalized);
+  const hasQuestionIntent = /\b(?:o que|como|por que|porque|qual|quais|quem|onde|quando|me explica|explique|explica|me fale|fale sobre|gostaria de saber|pode explicar)\b/.test(normalized);
   const hasQuestionPunctuation = text.includes("?");
-  const financialStart = text.search(/\\b(?:recebi|ganhei|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou|gastei|paguei|comprei|despesa|debitei)\\b/i);
+  const financialStart = text.search(/\b(?:recebi|ganhei|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou|gastei|paguei|comprei|despesa|debitei)\b/i);
   return financialStart > 0 && (hasQuestionPunctuation || hasQuestionIntent);
 }
-
 function isAllowedGeminiCommand(value: string): boolean {
   const v = value.trim();
   return /^\/(?:start|ajuda|saldo|resumo|ultimas|relatorio|categorias|orcamentos|recorrentes|lembretes)\s*$/i.test(v)
