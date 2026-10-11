@@ -3,6 +3,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8" } });
 const env = (name: string) => Deno.env.get(name)?.trim() ?? "";
+
 async function db(path: string, init: RequestInit = {}) {
   const base = env("SUPABASE_URL");
   const key = env("SUPABASE_SERVICE_ROLE_KEY");
@@ -12,6 +13,16 @@ async function db(path: string, init: RequestInit = {}) {
     headers: { apikey: key, authorization: "Bearer " + key, "content-type": "application/json", ...(init.headers ?? {}) },
   });
 }
+
+async function validateSchedulerSecret(candidate: string): Promise<boolean> {
+  const response = await db("rpc/iris_validate_scheduler_secret", {
+    method: "POST",
+    body: JSON.stringify({ candidate }),
+  });
+  if (!response.ok) throw new Error("Could not validate scheduler authentication");
+  return (await response.json()) === true;
+}
+
 async function telegram(method: string, payload: Record<string, unknown>) {
   const token = env("TELEGRAM_BOT_TOKEN");
   if (!token) throw new Error("Telegram token is not configured");
@@ -21,9 +32,11 @@ async function telegram(method: string, payload: Record<string, unknown>) {
   if (!response.ok) throw new Error("Telegram API returned " + response.status);
   return await response.json();
 }
+
 function money(value: number) {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
+
 function nextDate(value: string, frequency: string): string {
   const [year, month, day] = value.split("-").map(Number);
   if (frequency === "weekly") return new Date(Date.UTC(year, month - 1, day + 7)).toISOString().slice(0, 10);
@@ -37,18 +50,22 @@ function nextDate(value: string, frequency: string): string {
   const lastDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
   return targetYear + "-" + String(targetMonth).padStart(2, "0") + "-" + String(Math.min(day, lastDay)).padStart(2, "0");
 }
+
 async function getChat(userId: string): Promise<number | null> {
   const response = await db("iris_users?id=eq." + encodeURIComponent(userId) + "&select=telegram_chat_id&limit=1");
   if (!response.ok) throw new Error("Could not read Telegram chat");
   const rows = await response.json();
   return rows?.[0]?.telegram_chat_id ? Number(rows[0].telegram_chat_id) : null;
 }
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-  const secret = env("IRIS_SCHEDULER_SECRET");
-  if (!secret) return json({ error: "scheduler_secret_not_configured" }, 503);
-  if (req.headers.get("x-iris-scheduler-secret") !== secret) return json({ error: "unauthorized" }, 401);
+  const candidate = req.headers.get("x-iris-scheduler-secret") ?? "";
+  if (!candidate) return json({ error: "unauthorized" }, 401);
   try {
+    const valid = await validateSchedulerSecret(candidate);
+    if (!valid) return json({ error: "unauthorized" }, 401);
+
     const now = new Date();
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Fortaleza", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
     const reminderResponse = await db("reminders?status=eq.pending&remind_at=lte." + encodeURIComponent(now.toISOString()) + "&select=id,user_id,title,body,remind_at&order=remind_at.asc&limit=50");
