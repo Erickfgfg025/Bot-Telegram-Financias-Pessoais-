@@ -113,12 +113,12 @@ async function sendText(chatId: number, userId: string, text: string) {
   if (!savedUser.ok) throw new Error("Could not save incoming message");
   const entry = parseEntry(text);
   let answer: string;
-  if (/^\/cancelar\\b/i.test(text.trim())) {
+  if (/^\/cancelar\b/i.test(text.trim())) {
     const preferences = await readPreferences(userId);
     delete preferences.pending_transaction_delete;
     await writePreferences(userId, preferences);
     answer = "✅ A operação foi cancelada. Nenhum lançamento foi alterado.";
-  } else if (/^\/confirmar\\b/i.test(text.trim())) {
+  } else if (/^\/confirmar\b/i.test(text.trim())) {
     const preferences = await readPreferences(userId);
     const pending = preferences.pending_transaction_delete as { id?: string; created_at?: string } | undefined;
     const createdAt = pending?.created_at ? Date.parse(pending.created_at) : 0;
@@ -138,8 +138,8 @@ async function sendText(chatId: number, userId: string, text: string) {
         ? "🗑️ <b>Lançamento excluído.</b> O registro foi removido e os totais serão recalculados nas consultas."
         : "Não encontrei esse lançamento. Ele pode já ter sido removido; nenhum outro registro foi alterado.";
     }
-  } else if (/^\/excluir(?:\\s+(\\d+))?\\s*$/i.test(text.trim())) {
-    const match = text.trim().match(/^\/excluir(?:\\s+(\\d+))?\\s*$/i);
+  } else if (/^\/excluir(?:\s+(\d+))?\s*$/i.test(text.trim())) {
+    const match = text.trim().match(/^\/excluir(?:\s+(\d+))?\s*$/i);
     const index = match?.[1] ? Number(match[1]) : 0;
     const rows = await getTransactions(userId, { limit: 5 });
     if (!rows.length) {
@@ -157,7 +157,7 @@ async function sendText(chatId: number, userId: string, text: string) {
       await writePreferences(userId, preferences);
       answer = `⚠️ <b>Confirme a exclusão</b>\\n\\n${chosen.kind === "income" ? "Receita" : "Despesa"}: <b>${money(Number(chosen.amount) || 0)}</b>\\nDescrição: ${escapeHtml(chosen.description || "Sem descrição")}\\n\\nEnvie <code>/confirmar</code> para excluir este lançamento ou <code>/cancelar</code> para manter.`;
     }
-  } else if (/^\/saldo\\b/i.test(text.trim())) {
+  } else if (/^\/saldo\b/i.test(text.trim())) {
     const rows = await getTransactions(userId);
     const t = totals(rows);
     answer = `💰 <b>Seu saldo registrado</b>\n\n🟢 Receitas: <b>${money(t.income)}</b>\n🔴 Despesas: <b>${money(t.expense)}</b>\n━━━━━━━━━━━━\n💵 Saldo: <b>${money(t.balance)}</b>\n\n<i>Considera até os últimos 1.000 lançamentos registrados.</i>`;
