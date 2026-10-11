@@ -570,7 +570,22 @@ async function sendText(chatId: number, userId: string, text: string) {
   let aiConversationReply: string | null = null;
   let aiSupplementaryReply: string | null = null;
   let aiBatchTransactions: FinancialEntry[] | null = null;
-  if (!text.startsWith("/") && text === originalText && (!parseEntry(text) || looksLikeMixedFinancialMessage(text) || looksLikeMultiFinancialMessage(text)) && !editingAtStart) {
+
+  // Responda perguntas sobre a primeira mensagem usando o histórico real salvo, sem depender da interpretação do Gemini.
+  const normalizedQuestion = normalizeText(originalText);
+  const asksFirstMessage = /\b(?:qual foi|lembra|lembra qual|me diz|diz)\b.{0,55}\b(?:primeira|primeiro)\b.{0,45}\b(?:mensagem|coisa que eu disse|coisa que te mandei|texto que te mandei)\b|\b(?:primeira|primeiro)\b.{0,45}\b(?:mensagem)\b.{0,45}\b(?:te mandei|que mandei|que enviei|que eu disse|que te enviei)\b/.test(normalizedQuestion);
+  if (asksFirstMessage) {
+    const firstMessageResponse = await db("conversation_messages?user_id=eq." + encodeURIComponent(userId) + "&role=eq.user&select=content,created_at&order=created_at.asc&limit=1");
+    if (firstMessageResponse.ok) {
+      const firstMessages = await firstMessageResponse.json();
+      const firstContent = Array.isArray(firstMessages) && typeof firstMessages[0]?.content === "string" ? firstMessages[0].content.trim() : "";
+      aiConversationReply = firstContent
+        ? `A primeira mensagem sua que tenho registrada aqui foi: “${firstContent.slice(0, 1000)}” 📌`
+        : "Ainda não encontrei uma mensagem anterior registrada por aqui. 😅";
+    }
+  }
+
+  if (!aiConversationReply && !text.startsWith("/") && text === originalText && (!parseEntry(text) || looksLikeMixedFinancialMessage(text) || looksLikeMultiFinancialMessage(text)) && !editingAtStart) {
     const aiDecision = await askGeminiIntent(userId, editPreferences);
     if (aiDecision?.kind === "reply") aiConversationReply = aiDecision.value;
     else if (aiDecision?.kind === "command") text = aiDecision.value;
