@@ -211,17 +211,17 @@ type GeminiDecision = { kind: "command" | "reply"; value: string };
 async function callGemini(parts: GeminiPart[], options: { responseJson?: boolean; system?: string; contents?: Array<{ role: string; parts: GeminiPart[] }> } = {}): Promise<string | null> {
   const apiKey = env("GEMINI_API_KEY");
   if (!apiKey) return null;
-  const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent";
   const body: Record<string, unknown> = {
     contents: options.contents?.length ? options.contents : [{ role: "user", parts }],
-    generationConfig: { temperature: options.responseJson ? 0.1 : 0.2, maxOutputTokens: options.responseJson ? 280 : 700, thinkingConfig: { thinkingBudget: 0 } },
+    generationConfig: { temperature: options.responseJson ? 0.1 : 0.2, maxOutputTokens: options.responseJson ? 280 : 700, thinkingConfig: { thinkingLevel: "minimal" } },
   };
   if (options.system) body.systemInstruction = { parts: [{ text: options.system }] };
   if (options.responseJson) {
     body.generationConfig = {
       temperature: 0.1,
       maxOutputTokens: 280,
-      thinkingConfig: { thinkingBudget: 0 },
+      thinkingConfig: { thinkingLevel: "minimal" },
       responseMimeType: "application/json",
       responseSchema: {
         type: "OBJECT",
