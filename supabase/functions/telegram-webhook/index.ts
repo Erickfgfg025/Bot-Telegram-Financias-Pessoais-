@@ -592,10 +592,10 @@ async function sendText(chatId: number, userId: string, text: string) {
   let aiBatchTransactions: FinancialEntry[] | null = null;
 
   // Guardar pedidos explícitos de memória sem depender da classificação do modelo de IA.
-  const explicitMemoryMatch = originalText.match(/^\\s*(?:[ií]ris[,:;]?\\s*)?(?:lembra|lembre-se|guarda|guarde|memoriza|memorize|anota|anote|salva|salve)\\s+(?:que\\s+)?(.+?)\\s*[.!?]*\\s*$/i);
-  if (explicitMemoryMatch && !/^(?:o que|qual|quem|quando|onde|como)\\b/i.test(explicitMemoryMatch[1].trim())) {
+  const explicitMemoryMatch = originalText.match(/^\s*(?:[ií]ris[,:;]?\s*)?(?:lembra|lembre-se|guarda|guarde|memoriza|memorize|anota|anote|salva|salve)\s+(?:que\s+)?(.+?)\s*[.!?]*\s*$/i);
+  if (explicitMemoryMatch && !/^(?:o que|qual|quem|quando|onde|como)\b/i.test(explicitMemoryMatch[1].trim())) {
     const rawFacts = explicitMemoryMatch[1].trim().replace(/[.!?]+$/, "");
-    const additions = rawFacts.split(/\\s+e que\\s+/i).map((fact: string) => fact.trim()).filter((fact: string) => fact.length >= 4);
+    const additions = rawFacts.split(/\s+e que\s+/i).map((fact: string) => fact.trim()).filter((fact: string) => fact.length >= 4);
     const oldFacts = Array.isArray(editPreferences.memory_facts) ? editPreferences.memory_facts.filter((fact): fact is string => typeof fact === "string") : [];
     const merged = [...oldFacts];
     for (const fact of additions) {
@@ -623,9 +623,9 @@ async function sendText(chatId: number, userId: string, text: string) {
   }
 
   // Responder perguntas simples de memória diretamente quando já houver fatos salvos.
-  if (!aiConversationReply && /\\b(?:meu projeto|nome do meu projeto|como eu prefiro|como prefiro|minhas preferencias|o que voce lembra|o que lembra|qual .* eu te falei|lembra .* que)\\b/.test(normalizedQuestion)) {
+  if (!aiConversationReply && /\b(?:meu projeto|nome do meu projeto|como eu prefiro|como prefiro|minhas preferencias|o que voce lembra|o que lembra|qual .* eu te falei|lembra .* que)\b/.test(normalizedQuestion)) {
     const facts = Array.isArray(editPreferences.memory_facts) ? editPreferences.memory_facts.filter((fact): fact is string => typeof fact === "string") : [];
-    if (facts.length) aiConversationReply = "🧠 Lembro destas informações:\\n\\n" + facts.map((fact, index) => (index + 1) + ". " + fact).join("\\n");
+    if (facts.length) aiConversationReply = "🧠 Lembro destas informações:\n\n" + facts.map((fact, index) => (index + 1) + ". " + fact).join("\n");
   }
 
   if (!aiConversationReply && !text.startsWith("/") && text === originalText && (!parseEntry(text) || looksLikeMixedFinancialMessage(text) || looksLikeMultiFinancialMessage(text)) && !editingAtStart) {
