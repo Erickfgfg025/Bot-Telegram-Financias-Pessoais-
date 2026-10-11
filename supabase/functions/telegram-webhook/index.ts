@@ -53,10 +53,10 @@ function escapeHtml(text: string) {
 function money(value: number) {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
-type TransactionRow = { kind: string; amount: number | string; description: string | null; occurred_at: string };
+type TransactionRow = { id: string; kind: string; amount: number | string; description: string | null; occurred_at: string };
 async function getTransactions(userId: string, options: { from?: string; to?: string; limit?: number } = {}): Promise<TransactionRow[]> {
   const params = new URLSearchParams({
-    select: "kind,amount,description,occurred_at",
+    select: "id,kind,amount,description,occurred_at",
     user_id: `eq.${userId}`,
     order: "occurred_at.desc",
     limit: String(options.limit ?? 1000),
@@ -67,6 +67,22 @@ async function getTransactions(userId: string, options: { from?: string; to?: st
   if (!response.ok) throw new Error("Could not read financial transactions");
   return await response.json();
 }
+
+async function readPreferences(userId: string): Promise<Record<string, unknown>> {
+  const response = await db(`user_preferences?user_id=eq.${userId}&select=preferences&limit=1`);
+  if (!response.ok) throw new Error("Could not read user preferences");
+  const rows = await response.json();
+  return rows?.[0]?.preferences && typeof rows[0].preferences === "object" ? rows[0].preferences : {};
+}
+async function writePreferences(userId: string, preferences: Record<string, unknown>) {
+  const response = await db("user_preferences?on_conflict=user_id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({ user_id: userId, preferences, updated_at: new Date().toISOString() }),
+  });
+  if (!response.ok) throw new Error("Could not save user preferences");
+}
+
 function monthRange() {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Fortaleza", year: "numeric", month: "2-digit",
@@ -97,7 +113,51 @@ async function sendText(chatId: number, userId: string, text: string) {
   if (!savedUser.ok) throw new Error("Could not save incoming message");
   const entry = parseEntry(text);
   let answer: string;
-  if (/^\/saldo\b/i.test(text.trim())) {
+  if (/^\/cancelar\\b/i.test(text.trim())) {
+    const preferences = await readPreferences(userId);
+    delete preferences.pending_transaction_delete;
+    await writePreferences(userId, preferences);
+    answer = "✅ A operação foi cancelada. Nenhum lançamento foi alterado.";
+  } else if (/^\/confirmar\\b/i.test(text.trim())) {
+    const preferences = await readPreferences(userId);
+    const pending = preferences.pending_transaction_delete as { id?: string; created_at?: string } | undefined;
+    const createdAt = pending?.created_at ? Date.parse(pending.created_at) : 0;
+    if (!pending?.id || !createdAt || Date.now() - createdAt > 10 * 60 * 1000) {
+      delete preferences.pending_transaction_delete;
+      await writePreferences(userId, preferences);
+      answer = "⌛ Não há exclusão pendente válida. Envie /excluir para começar novamente.";
+    } else {
+      const removed = await db(`transactions?id=eq.${encodeURIComponent(pending.id)}&user_id=eq.${encodeURIComponent(userId)}`, {
+        method: "DELETE", headers: { Prefer: "return=representation" },
+      });
+      if (!removed.ok) throw new Error("Could not delete transaction");
+      const deletedRows = await removed.json();
+      delete preferences.pending_transaction_delete;
+      await writePreferences(userId, preferences);
+      answer = Array.isArray(deletedRows) && deletedRows.length
+        ? "🗑️ <b>Lançamento excluído.</b> O registro foi removido e os totais serão recalculados nas consultas."
+        : "Não encontrei esse lançamento. Ele pode já ter sido removido; nenhum outro registro foi alterado.";
+    }
+  } else if (/^\/excluir(?:\\s+(\\d+))?\\s*$/i.test(text.trim())) {
+    const match = text.trim().match(/^\/excluir(?:\\s+(\\d+))?\\s*$/i);
+    const index = match?.[1] ? Number(match[1]) : 0;
+    const rows = await getTransactions(userId, { limit: 5 });
+    if (!rows.length) {
+      answer = "📭 Não há lançamentos para excluir.";
+    } else if (!index) {
+      answer = "🗑️ <b>Qual lançamento deseja excluir?</b>\\n\\n" +
+        rows.map((row, i) => `${i + 1}. ${row.kind === "income" ? "🟢 Receita" : "🔴 Despesa"} · <b>${money(Number(row.amount) || 0)}</b>\\n   ${escapeHtml(row.description || "Sem descrição")} · ${new Date(row.occurred_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" })}`).join("\\n\\n") +
+        "\\n\\nEnvie <code>/excluir 1</code> para selecionar o primeiro item. A exclusão só ocorre após <code>/confirmar</code>. Para desistir, envie <code>/cancelar</code>.";
+    } else if (index < 1 || index > rows.length) {
+      answer = `Escolha um número entre 1 e ${rows.length}. Envie /excluir para ver a lista novamente.`;
+    } else {
+      const chosen = rows[index - 1];
+      const preferences = await readPreferences(userId);
+      preferences.pending_transaction_delete = { id: chosen.id, created_at: new Date().toISOString() };
+      await writePreferences(userId, preferences);
+      answer = `⚠️ <b>Confirme a exclusão</b>\\n\\n${chosen.kind === "income" ? "Receita" : "Despesa"}: <b>${money(Number(chosen.amount) || 0)}</b>\\nDescrição: ${escapeHtml(chosen.description || "Sem descrição")}\\n\\nEnvie <code>/confirmar</code> para excluir este lançamento ou <code>/cancelar</code> para manter.`;
+    }
+  } else if (/^\/saldo\\b/i.test(text.trim())) {
     const rows = await getTransactions(userId);
     const t = totals(rows);
     answer = `💰 <b>Seu saldo registrado</b>\n\n🟢 Receitas: <b>${money(t.income)}</b>\n🔴 Despesas: <b>${money(t.expense)}</b>\n━━━━━━━━━━━━\n💵 Saldo: <b>${money(t.balance)}</b>\n\n<i>Considera até os últimos 1.000 lançamentos registrados.</i>`;
@@ -129,7 +189,7 @@ async function sendText(chatId: number, userId: string, text: string) {
   } else if (/^\/(start|ajuda|help)\b/i.test(text.trim())) {
     answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nPosso começar registrando receitas e despesas por texto. Exemplos:\n• Gastei 25,90 no almoço\n• Paguei 120 conta de luz\n• Recebi 200 de um freela\n\nRelatórios, voz, memória semântica e outros recursos ainda estão em implementação.";
   } else {
-    answer = "Ainda não consegui identificar um lançamento com segurança.\n\nTente: <b>Gastei 25,90 no almoço</b> ou <b>Recebi 200 de um freela</b>. Consultas disponíveis: /saldo, /resumo e /ultimas.";
+    answer = "Ainda não consegui identificar um lançamento com segurança.\n\nTente: <b>Gastei 25,90 no almoço</b> ou <b>Recebi 200 de um freela</b>. Consultas: /saldo, /resumo e /ultimas. Para excluir com segurança, use /excluir, selecione um item e confirme com /confirmar.";
   }
   const savedAssistant = await db("conversation_messages", {
     method: "POST", headers: { Prefer: "return=minimal" },
