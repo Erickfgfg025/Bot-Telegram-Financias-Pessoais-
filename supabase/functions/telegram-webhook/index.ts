@@ -46,6 +46,17 @@ function parseEntry(text: string): { kind: "income" | "expense"; amount: number;
     (kind === "income" ? "Receita" : "Despesa");
   return { kind, amount, description: description.slice(0, 180) };
 }
+
+function parseEditDetails(raw: string): { amount: number; description: string } | null {
+  const match = raw.match(/(?:R\$\s*)?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|(?:R\$\s*)?\d+(?:[.,]\d{1,2})?/i);
+  if (!match) return null;
+  const amount = parseMoney(match[0].replace(/^R\$/i, ""));
+  if (!amount) return null;
+  const description = raw.replace(match[0], " ").replace(/^[,;:\- ]+|[,;:\- ]+$/g, "").replace(/\s+/g, " ").trim();
+  if (!description) return null;
+  return { amount, description: description.slice(0, 180) };
+}
+
 function escapeHtml(text: string) {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
@@ -112,12 +123,38 @@ async function sendText(chatId: number, userId: string, text: string) {
   });
   if (!savedUser.ok) throw new Error("Could not save incoming message");
   const entry = parseEntry(text);
+  const editPreferences = await readPreferences(userId);
+  const pendingEdit = editPreferences.pending_transaction_edit as { id?: string; created_at?: string } | undefined;
+  const pendingEditCreatedAt = pendingEdit?.created_at ? Date.parse(pendingEdit.created_at) : 0;
+  const pendingEditValid = Boolean(pendingEdit?.id && pendingEditCreatedAt && Date.now() - pendingEditCreatedAt <= 10 * 60 * 1000);
   let answer: string;
   if (/^\/cancelar\b/i.test(text.trim())) {
     const preferences = await readPreferences(userId);
     delete preferences.pending_transaction_delete;
+    delete preferences.pending_transaction_edit;
     await writePreferences(userId, preferences);
     answer = "✅ A operação foi cancelada. Nenhum lançamento foi alterado.";
+  } else if (pendingEditValid && !text.trim().startsWith("/")) {
+    const details = parseEditDetails(text);
+    if (!details) {
+      answer = "Não consegui identificar o novo valor e a descrição. Envie, por exemplo: <b>35,90 almoço e café</b>. Para desistir, use /cancelar.";
+    } else {
+      const updated = await db(`transactions?id=eq.${encodeURIComponent(pendingEdit!.id!)}&user_id=eq.${encodeURIComponent(userId)}`, {
+        method: "PATCH", headers: { Prefer: "return=representation" },
+        body: JSON.stringify({ amount: details.amount, description: details.description }),
+      });
+      if (!updated.ok) throw new Error("Could not update financial transaction");
+      const updatedRows = await updated.json();
+      delete editPreferences.pending_transaction_edit;
+      await writePreferences(userId, editPreferences);
+      answer = Array.isArray(updatedRows) && updatedRows.length
+        ? `✏️ <b>Lançamento atualizado</b>\nNovo valor: <b>${money(details.amount)}</b>\nDescrição: ${escapeHtml(details.description)}`
+        : "Não encontrei esse lançamento. Nenhuma outra transação foi alterada.";
+    }
+  } else if (pendingEdit && !pendingEditValid && !text.trim().startsWith("/")) {
+    delete editPreferences.pending_transaction_edit;
+    await writePreferences(userId, editPreferences);
+    answer = "⌛ A edição expirou. Envie /editar para começar novamente.";
   } else if (/^\/confirmar\b/i.test(text.trim())) {
     const preferences = await readPreferences(userId);
     const pending = preferences.pending_transaction_delete as { id?: string; created_at?: string } | undefined;
@@ -137,6 +174,26 @@ async function sendText(chatId: number, userId: string, text: string) {
       answer = Array.isArray(deletedRows) && deletedRows.length
         ? "🗑️ <b>Lançamento excluído.</b> O registro foi removido e os totais serão recalculados nas consultas."
         : "Não encontrei esse lançamento. Ele pode já ter sido removido; nenhum outro registro foi alterado.";
+    }
+  } else if (/^\/editar(?:\s+(\d+))?\s*$/i.test(text.trim())) {
+    const match = text.trim().match(/^\/editar(?:\s+(\d+))?\s*$/i);
+    const index = match?.[1] ? Number(match[1]) : 0;
+    const rows = await getTransactions(userId, { limit: 5 });
+    if (!rows.length) {
+      answer = "📭 Não há lançamentos para editar.";
+    } else if (!index) {
+      answer = "✏️ <b>Qual lançamento deseja editar?</b>\n\n" +
+        rows.map((row, i) => `${i + 1}. ${row.kind === "income" ? "🟢 Receita" : "🔴 Despesa"} · <b>${money(Number(row.amount) || 0)}</b>\n   ${escapeHtml(row.description || "Sem descrição")} · ${new Date(row.occurred_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" })}`).join("\n\n") +
+        "\n\nEnvie <code>/editar 1</code> para escolher. Depois, envie o novo valor e a descrição, por exemplo <code>35,90 almoço e café</code>. A edição expira em 10 minutos. Use /cancelar para desistir.";
+    } else if (index < 1 || index > rows.length) {
+      answer = `Escolha um número entre 1 e ${rows.length}. Envie /editar para ver a lista novamente.`;
+    } else {
+      const chosen = rows[index - 1];
+      const preferences = await readPreferences(userId);
+      delete preferences.pending_transaction_delete;
+      preferences.pending_transaction_edit = { id: chosen.id, created_at: new Date().toISOString() };
+      await writePreferences(userId, preferences);
+      answer = `✏️ <b>Editar lançamento</b>\n\nAtual: <b>${money(Number(chosen.amount) || 0)}</b> · ${escapeHtml(chosen.description || "Sem descrição")}\n\nEnvie o novo valor e a descrição, por exemplo <code>35,90 almoço e café</code>. Para manter o lançamento atual, envie /cancelar.`;
     }
   } else if (/^\/excluir(?:\s+(\d+))?\s*$/i.test(text.trim())) {
     const match = text.trim().match(/^\/excluir(?:\s+(\d+))?\s*$/i);
