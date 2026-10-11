@@ -106,6 +106,13 @@ function monthRange() {
   const end = `${nextYear}-${String(nextMonth).padStart(2, "0")}-01T00:00:00-03:00`;
   return { start, end, label: new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }) };
 }
+
+function validIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(value + "T12:00:00Z");
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
 function normalizeText(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR").trim();
 }
@@ -376,6 +383,84 @@ async function sendText(chatId: number, userId: string, text: string) {
         }).join("\n")
       : "Ainda não há despesas categorizadas neste mês.";
     answer = `📊 <b>Relatório financeiro · ${escapeHtml(range.label)}</b>\n\n🟢 Receitas: <b>${money(income)}</b>\n🔴 Despesas: <b>${money(expenses)}</b>\n${result >= 0 ? "💚" : "⚠️"} Resultado: <b>${money(result)}</b>\n${savings === null ? "📈 Taxa de economia: sem receitas registradas" : `📈 Taxa de economia: <b>${savings}%</b>`}\n🧾 Lançamentos: ${count}\n\n<b>Maiores categorias de despesa</b>\n${topText}\n\n<i>Relatório calculado a partir dos lançamentos registrados.</i>`;
+  } else if (/^\/recorrente(?:\s+.*)?$/i.test(text.trim())) {
+    const match = text.trim().match(/^\/recorrente\s+(receita|despesa)\s+(\S+)\s+(.+?)\s+(semanal|mensal|anual)\s+(\d{4}-\d{2}-\d{2})$/i);
+    if (!match) {
+      answer = "🔁 <b>Criar lançamento recorrente</b>\nUse: <code>/recorrente despesa 120 aluguel mensal 2026-11-05</code>\nFrequência: semanal, mensal ou anual. A data é a próxima execução.";
+    } else {
+      const kind = match[1].toLocaleLowerCase("pt-BR") === "receita" ? "income" : "expense";
+      const amount = parseMoney(match[2]);
+      const description = match[3].trim().slice(0, 180);
+      const frequency = ({ semanal: "weekly", mensal: "monthly", anual: "yearly" } as Record<string, string>)[match[4].toLocaleLowerCase("pt-BR")];
+      const date = match[5];
+      if (!amount || !description || !validIsoDate(date) || date < localToday()) {
+        answer = "Não consegui validar o valor ou a data. Use um valor positivo e uma próxima data igual ou posterior a hoje, no formato AAAA-MM-DD.";
+      } else {
+        const category = categoryGuess(description, kind);
+        const categoryId = await getOrCreateCategory(userId, category, kind);
+        const created = await db("recurring_rules", {
+          method: "POST", headers: { Prefer: "return=representation" },
+          body: JSON.stringify({ user_id: userId, description, kind, amount, frequency, next_run_at: date, category_id: categoryId, active: true }),
+        });
+        if (!created.ok) throw new Error("Could not create recurring rule");
+        answer = "🔁 <b>Lançamento recorrente criado</b>\n" + (kind === "income" ? "Receita" : "Despesa") + ": <b>" + money(amount) + "</b>\nDescrição: " + escapeHtml(description) + "\nFrequência: " + match[4].toLocaleLowerCase("pt-BR") + "\nPróxima execução: " + new Date(date + "T12:00:00Z").toLocaleDateString("pt-BR", { timeZone: "UTC" }) + "\n\nA recorrência será registrada automaticamente quando o agendador estiver ativo.";
+      }
+    }
+  } else if (/^\/recorrentes\b/i.test(text.trim())) {
+    const response = await db("recurring_rules?user_id=eq." + encodeURIComponent(userId) + "&select=id,description,kind,amount,frequency,next_run_at,active&order=next_run_at.asc&limit=20");
+    if (!response.ok) throw new Error("Could not read recurring rules");
+    const rows = await response.json();
+    answer = Array.isArray(rows) && rows.length
+      ? "🔁 <b>Seus lançamentos recorrentes</b>\n\n" + rows.map((r: any, i: number) => (i + 1) + ". " + (r.active ? "🟢" : "⏸️") + " <b>" + money(Number(r.amount) || 0) + "</b> · " + (r.kind === "income" ? "Receita" : "Despesa") + "\n   " + escapeHtml(r.description) + " · " + (({weekly:"semanal",monthly:"mensal",yearly:"anual"} as Record<string,string>)[r.frequency] || r.frequency) + "\n   Próxima: " + new Date(r.next_run_at + "T12:00:00Z").toLocaleDateString("pt-BR", {timeZone:"UTC"})).join("\n\n") + "\n\nPara pausar, use <code>/pausarrecorrente 1</code> (número da lista)."
+      : "Você ainda não tem recorrências. Exemplo: <code>/recorrente despesa 120 aluguel mensal 2026-11-05</code>";
+  } else if (/^\/pausarrecorrente\s+\d+\s*$/i.test(text.trim())) {
+    const index = Number(text.trim().match(/^\/pausarrecorrente\s+(\d+)/i)?.[1] || 0);
+    const listed = await db("recurring_rules?user_id=eq." + encodeURIComponent(userId) + "&select=id,description,amount,active&order=next_run_at.asc&limit=20");
+    if (!listed.ok) throw new Error("Could not list recurring rules");
+    const rows = await listed.json();
+    if (!index || index > rows.length) answer = "Número inválido. Envie /recorrentes para ver a lista.";
+    else if (!rows[index - 1].active) answer = "Essa recorrência já está pausada.";
+    else {
+      const item = rows[index - 1];
+      const updated = await db("recurring_rules?id=eq." + encodeURIComponent(item.id) + "&user_id=eq." + encodeURIComponent(userId), {method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({active:false})});
+      if (!updated.ok) throw new Error("Could not pause recurring rule");
+      answer = "⏸️ Recorrência pausada: <b>" + escapeHtml(item.description) + "</b>. Nenhum lançamento futuro será criado enquanto estiver pausada.";
+    }
+  } else if (/^\/lembrete(?:\s+.*)?$/i.test(text.trim())) {
+    const match = text.trim().match(/^\/lembrete\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})\s+(.+)$/i);
+    if (!match) {
+      answer = "⏰ <b>Criar lembrete</b>\nUse: <code>/lembrete 2026-11-05 09:00 pagar conta de luz</code>\nHorário de Brasília. A data e hora devem ser futuras.";
+    } else {
+      const date = match[1], hh = match[2], mm = match[3], title = match[4].trim().slice(0, 180);
+      const hour = Number(hh), minute = Number(mm);
+      const remindAt = new Date(date + "T" + hh + ":" + mm + ":00-03:00");
+      if (!validIsoDate(date) || hour > 23 || minute > 59 || !title || remindAt.getTime() <= Date.now()) {
+        answer = "Data ou hora inválida. Informe uma data futura no formato AAAA-MM-DD HH:MM, usando o horário de Brasília.";
+      } else {
+        const created = await db("reminders", {method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify({user_id:userId,title,body:null,remind_at:remindAt.toISOString(),status:"pending"})});
+        if (!created.ok) throw new Error("Could not create reminder");
+        answer = "⏰ <b>Lembrete criado</b>\n" + escapeHtml(title) + "\nData: " + remindAt.toLocaleString("pt-BR", {timeZone:"America/Fortaleza"}) + "\n\nVocê receberá a mensagem quando o agendador estiver ativo.";
+      }
+    }
+  } else if (/^\/lembretes\b/i.test(text.trim())) {
+    const response = await db("reminders?user_id=eq." + encodeURIComponent(userId) + "&status=eq.pending&select=id,title,remind_at,status&order=remind_at.asc&limit=20");
+    if (!response.ok) throw new Error("Could not read reminders");
+    const rows = await response.json();
+    answer = Array.isArray(rows) && rows.length
+      ? "⏰ <b>Seus lembretes pendentes</b>\n\n" + rows.map((r: any, i: number) => (i + 1) + ". <b>" + escapeHtml(r.title) + "</b>\n   " + new Date(r.remind_at).toLocaleString("pt-BR", {timeZone:"America/Fortaleza"})).join("\n\n")
+      : "📭 Você não tem lembretes pendentes. Crie um com <code>/lembrete 2026-11-05 09:00 pagar conta</code>.";
+  } else if (/^\/cancelarlembrete\s+\d+\s*$/i.test(text.trim())) {
+    const index = Number(text.trim().match(/^\/cancelarlembrete\s+(\d+)/i)?.[1] || 0);
+    const listed = await db("reminders?user_id=eq." + encodeURIComponent(userId) + "&status=eq.pending&select=id,title,remind_at&order=remind_at.asc&limit=20");
+    if (!listed.ok) throw new Error("Could not list reminders");
+    const rows = await listed.json();
+    if (!index || index > rows.length) answer = "Número inválido. Envie /lembretes para ver os lembretes pendentes.";
+    else {
+      const item = rows[index - 1];
+      const updated = await db("reminders?id=eq." + encodeURIComponent(item.id) + "&user_id=eq." + encodeURIComponent(userId) + "&status=eq.pending", {method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({status:"cancelled"})});
+      if (!updated.ok) throw new Error("Could not cancel reminder");
+      answer = "🗑️ Lembrete cancelado: <b>" + escapeHtml(item.title) + "</b>.";
+    }
   } else if (/^\/categorias\b/i.test(text.trim())) {
     const response = await db(`categories?user_id=eq.${encodeURIComponent(userId)}&select=name,kind,icon&order=kind,name`);
     if (!response.ok) throw new Error("Could not read categories");
@@ -436,9 +521,9 @@ async function sendText(chatId: number, userId: string, text: string) {
     const label = entry.kind === "income" ? "Receita" : "Despesa";
     answer = `✅ <b>${label} registrada</b>\nValor: <b>${entry.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\nDescrição: ${escapeHtml(entry.description)}\n\nCategoria automática: ${escapeHtml(category.name)} ${category.icon}.${budgetNotice}`;
   } else if (/^\/(start|ajuda|help)\b/i.test(text.trim())) {
-    answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nPosso começar registrando receitas e despesas por texto. Exemplos:\n• Gastei 25,90 no almoço\n• Paguei 120 conta de luz\n• Recebi 200 de um freela\n\nComandos: /saldo, /resumo, /ultimas, /editar, /excluir, /orcamento, /orcamentos, /relatorio e /categorias.";
+    answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nPosso começar registrando receitas e despesas por texto. Exemplos:\n• Gastei 25,90 no almoço\n• Paguei 120 conta de luz\n• Recebi 200 de um freela\n\nComandos: /saldo, /resumo, /ultimas, /editar, /excluir, /orcamento, /orcamentos, /relatorio, /categorias, /recorrente, /recorrentes, /lembrete e /lembretes.";
   } else {
-    answer = "Ainda não consegui identificar um lançamento com segurança.\n\nTente: <b>Gastei 25,90 no almoço</b> ou <b>Recebi 200 de um freela</b>. Comandos: /saldo, /resumo, /ultimas, /orcamento, /orcamentos, /relatorio, /categorias, /editar e /excluir.";
+    answer = "Ainda não consegui identificar um lançamento com segurança.\n\nTente: <b>Gastei 25,90 no almoço</b> ou <b>Recebi 200 de um freela</b>. Comandos: /saldo, /resumo, /ultimas, /orcamento, /orcamentos, /relatorio, /categorias, /editar, /excluir, /recorrente, /recorrentes, /lembrete e /lembretes.";
   }
   const savedAssistant = await db("conversation_messages", {
     method: "POST", headers: { Prefer: "return=minimal" },
