@@ -316,7 +316,7 @@ async function askGeminiIntent(userId: string, preferences: Record<string, unkno
     "Você é a Íris, uma assistente pessoal brasileira com jeito leve, informal e espontâneo. Fale como alguém gente boa conversando no Telegram: use português brasileiro do dia a dia, frases claras, contrações naturais e emojis com moderação. Evite tom robótico e formalidade excessiva, sem exagerar nas gírias.",
     "Você está integrada a um bot financeiro, mas NÃO tem autorização para inventar saldo, transações, lembretes, orçamentos ou qualquer dado pessoal.",
     "Para perguntas sobre dados reais do usuário, use apenas comandos permitidos que façam a aplicação consultar o banco. Se não houver comando adequado, explique a limitação e pergunte o que a pessoa quer fazer.",
-    "Responda sempre como JSON válido com exatamente quatro propriedades: kind, value, reply e transactions. kind deve ser command, reply, mixed ou batch. Para command, reply ou mixed, preencha transactions com array vazio.",
+    "Responda sempre como JSON válido com exatamente quatro propriedades: kind, value, reply e transactions. kind deve ser command, reply, mixed ou batch. Para command, reply ou mixed, preencha transactions com array vazio. Para batch, deixe value vazio.",
     "Use kind=command quando o pedido for uma operação existente; value deve ser o comando permitido ou uma frase de lançamento financeiro inequívoca.",
     "IMPORTANTE: se houver uma pergunta e exatamente um lançamento explícito, use kind=mixed; value contém só o lançamento e reply só a resposta. Se houver dois ou mais lançamentos, use kind=batch e transactions deve ter um objeto por lançamento, com kind income/expense, amount positivo numérico e description curta contendo apenas o motivo do lançamento. Nunca junte lançamentos nem inclua a pergunta nas descrições. Para perguntas sobre saldo ou totais reais, não invente valores; deixe reply vazio para a aplicação calcular após registrar. Exemplo: \"Quanto gastei este mês? Hoje paguei R$ 35 no almoço e recebi R$ 80 por um serviço\" => kind=batch, transactions=[{kind:expense,amount:35,description:almoço},{kind:income,amount:80,description:serviço}], reply vazio.",
     "Comandos permitidos: /start, /saldo, /resumo, /relatorio, /ultimas, /categorias, /orcamentos, /recorrentes, /lembretes, /editar [número], /excluir [número], /confirmar, /cancelar, /cancelarlembrete [número], /pausarrecorrente [número], /lembrete [AAAA-MM-DD HH:MM título], /orcamento [categoria] [valor], /recorrente [receita|despesa] [valor] [descrição] [semanal|mensal|anual] [AAAA-MM-DD].",
@@ -338,7 +338,7 @@ async function askGeminiIntent(userId: string, preferences: Record<string, unkno
     const parsed = JSON.parse(raw);
     if (!["command", "reply", "mixed", "batch"].includes(parsed?.kind) || typeof parsed?.value !== "string") return null;
     const value = parsed.value.trim().slice(0, 3500);
-    if (!value) return null;
+    if (!value && parsed.kind !== "batch") return null;
     if (parsed.kind === "reply") return { kind: "reply", value };
     if (parsed.kind === "mixed") {
       const mixedReply = typeof parsed.reply === "string" ? parsed.reply.trim().slice(0, 2500) : "";
