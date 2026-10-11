@@ -34,15 +34,15 @@ function parseMoney(raw: string): number | null {
 }
 function parseEntry(text: string): { kind: "income" | "expense"; amount: number; description: string } | null {
   const lower = text.toLocaleLowerCase("pt-BR");
-  const kind = /\b(recebi|ganhei|salário|salario|renda|vendi)\b/.test(lower) ? "income" :
-    /\b(gastei|paguei|comprei|despesa|conta de)\b/.test(lower) ? "expense" : null;
+  const kind = /\b(recebi|ganhei|salário|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou)\b/.test(lower) ? "income" :
+    /\b(gastei|paguei|comprei|despesa|conta de|debitei|passei no cartao)\b/.test(lower) ? "expense" : null;
   if (!kind) return null;
   const match = text.match(/(?<![\d.,])(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?(?![\d.,])/i);
   if (!match) return null;
   const amount = parseMoney(match[0].replace(/^R\$/i, ""));
   if (!amount) return null;
   const description = text.replace(match[0], " ")
-    .replace(/\b(recebi|ganhei|salário|salario|renda|vendi|gastei|paguei|comprei|despesa|conta de)\b/ig, " ")
+    .replace(/\b(recebi|ganhei|salário|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou|gastei|paguei|comprei|despesa|conta de|debitei|passei no cartao)\b/ig, " ")
     .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "") ||
     (kind === "income" ? "Receita" : "Despesa");
   return { kind, amount, description: description.slice(0, 180) };
@@ -201,14 +201,208 @@ function totals(rows: TransactionRow[]) {
   return { income, expense, balance: income - expense };
 }
 
+
+
+function naturalLocalParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Fortaleza", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date);
+  const get = (type: string) => parts.find(part => part.type === type)?.value || "00";
+  return { year: Number(get("year")), month: Number(get("month")), day: Number(get("day")), hour: Number(get("hour")), minute: Number(get("minute")) };
+}
+function naturalDateOffset(iso: string, days: number) {
+  const [year, month, day] = iso.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+function nextNaturalRecurringDate(frequency: "weekly" | "monthly" | "yearly") {
+  const [year, month, day] = localToday().split("-").map(Number);
+  if (frequency === "weekly") return naturalDateOffset(localToday(), 7);
+  if (frequency === "yearly") {
+    const next = new Date(Date.UTC(year + 1, month - 1, day));
+    if (next.getUTCMonth() !== month - 1) next.setUTCDate(0);
+    return next.toISOString().slice(0, 10);
+  }
+  const targetMonth = month === 12 ? 1 : month + 1;
+  const targetYear = month === 12 ? year + 1 : year;
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+  return String(targetYear) + "-" + String(targetMonth).padStart(2, "0") + "-" + String(Math.min(day, lastDay)).padStart(2, "0");
+}
+
+function naturalReminderCommand(raw: string, normalized: string): string | null {
+  const intent = /\b(?:me lembre|me lembra|lembre-?me|lembra-?me|me avise|me avisa|avise-?me|avisa-?me|quero ser lembrad[oa])\b/.test(normalized)
+    || /^(?:por favor )?(?:lembre|lembra|lembrete)\b/.test(normalized)
+    || /\b(?:quero|crie|criar|adicione|adicionar|agende|agendar)\s+(?:um\s+)?lembrete\b/.test(normalized);
+  if (!intent) return null;
+  let date: string | null = null;
+  let time: string | null = null;
+  const relative = normalized.match(/\b(?:daqui\s+a|em)\s+(\d+)\s+(minutos?|mins?|horas?|dias?|semanas?)\b/);
+  if (relative) {
+    const n = Number(relative[1]), unit = relative[2];
+    const ms = unit.startsWith("min") ? 60_000 : unit.startsWith("hora") ? 3_600_000 : unit.startsWith("dia") ? 86_400_000 : 604_800_000;
+    const target = naturalLocalParts(new Date(Math.ceil((Date.now() + n * ms) / 60_000) * 60_000));
+    date = String(target.year) + "-" + String(target.month).padStart(2, "0") + "-" + String(target.day).padStart(2, "0");
+    time = String(target.hour).padStart(2, "0") + ":" + String(target.minute).padStart(2, "0");
+  } else {
+    const today = localToday();
+    if (/\bdepois de amanha\b/.test(normalized)) date = naturalDateOffset(today, 2);
+    else if (/\bamanha\b/.test(normalized)) date = naturalDateOffset(today, 1);
+    else if (/\bhoje\b/.test(normalized)) date = today;
+    const iso = normalized.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+    if (iso && validIsoDate(iso[1])) date = iso[1];
+    const dm = normalized.match(/\b(?:dia\s+)?(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b/);
+    if (!date && dm) {
+      const now = naturalLocalParts();
+      let year = dm[3] ? Number(dm[3]) : now.year;
+      if (year < 100) year += 2000;
+      let candidate = String(year) + "-" + String(Number(dm[2])).padStart(2, "0") + "-" + String(Number(dm[1])).padStart(2, "0");
+      if (validIsoDate(candidate)) {
+        if (!dm[3] && candidate < today) {
+          year++;
+          candidate = String(year) + "-" + String(Number(dm[2])).padStart(2, "0") + "-" + String(Number(dm[1])).padStart(2, "0");
+        }
+        if (validIsoDate(candidate)) date = candidate;
+      }
+    }
+    if (!date) {
+      const days: Record<string, number> = { domingo: 0, segunda: 1, terca: 2, quarta: 3, quinta: 4, sexta: 5, sabado: 6 };
+      const wd = normalized.match(/\b(?:na\s+)?(domingo|segunda|terca|quarta|quinta|sexta|sabado)(?:-feira)?\b/);
+      if (wd) {
+        const p = naturalLocalParts();
+        const todayWeekday = new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay();
+        const delta = (days[wd[1]] - todayWeekday + 7) % 7 || 7;
+        date = naturalDateOffset(today, delta);
+      }
+    }
+    let clock = normalized.match(/\bas\s*(\d{1,2})(?:(?::|h)(\d{2}))?\s*h?\b/);
+    if (!clock) clock = normalized.match(/\b(\d{1,2})h(\d{2})?\b/);
+    if (!clock) clock = normalized.match(/\b(\d{1,2}):(\d{2})\b/);
+    if (clock) {
+      let hour = Number(clock[1]);
+      const minute = Number(clock[2] || 0);
+      if (/\b(?:da tarde|a tarde|da noite|a noite)\b/.test(normalized) && hour < 12) hour += 12;
+      if (/\b(?:da manha|a manha|de manha|pela manha)\b/.test(normalized) && hour === 12) hour = 0;
+      if (hour <= 23 && minute <= 59) time = String(hour).padStart(2, "0") + ":" + String(minute).padStart(2, "0");
+    }
+  }
+  const title = raw.trim()
+    .replace(/^(?:por favor[, ]*)?(?:(?:quero|crie|criar|adicione|adicionar|agende|agendar)\s+(?:um\s+)?lembrete|(?:me\s+)?(?:lembre|lembra|lembrar|avise|avisa)(?:-me)?)\s*/i, "")
+    .replace(/^(?:de|para|pra|que|um|uma)\s+/i, "")
+    .replace(/\b(?:daqui\s+a|em)\s+\d+\s+(?:minutos?|mins?|horas?|dias?|semanas?)\b/ig, " ")
+    .replace(/\b(?:depois\s+de\s+amanh[ãa]|amanh[ãa]|hoje)\b/ig, " ")
+    .replace(/\b(?:dia\s+)?\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/g, " ")
+    .replace(/\b20\d{2}-\d{2}-\d{2}\b/g, " ")
+    .replace(/\b(?:às|as)\s*\d{1,2}(?:(?::|h)\d{2})?\s*(?:horas?|h)?\b/ig, " ")
+    .replace(/\b\d{1,2}h(?:\d{2})?\b/ig, " ")
+    .replace(/\b(?:da|de|pela)\s+(?:manhã|manha|tarde|noite)\b/ig, " ")
+    .replace(/\b(?:domingo|segunda|terça|terca|quarta|quinta|sexta|sábado|sabado)(?:-feira)?\b/ig, " ")
+    .replace(/^[,;:\- ]+|[,;:\- ]+$/g, "")
+    .replace(/^(?:de|para|pra|que|às|as|em)\s+/i, "")
+    .replace(/\s+/g, " ").trim().slice(0, 180);
+  if (!date || !time || !title) return "/lembrete";
+  return "/lembrete " + date + " " + time + " " + title;
+}
+
+function naturalRecurringCommand(raw: string, normalized: string): string | null {
+  const cue = /\b(?:todo|toda|todos|todas)\s+(?:a\s+)?(?:semana|mes|ano)\b|\b(?:a cada|semanalmente|mensalmente|anualmente|recorrente|recorrencia)\b/.test(normalized);
+  if (!cue) return null;
+  const amounts = [...raw.matchAll(/(?<![\d.,])(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?(?![\d.,])/gi)];
+  if (!amounts.length) return null;
+  const amountMatch = amounts[amounts.length - 1];
+  const amount = amountMatch[0].replace(/^R\$/i, "").replace(/\s/g, "");
+  const frequency: "weekly" | "monthly" | "yearly" = /\b(?:semana|semanalmente)\b/.test(normalized) ? "weekly" : /\b(?:ano|anualmente|anual)\b/.test(normalized) ? "yearly" : "monthly";
+  const kind = /\b(?:recebo|receber|ganho|ganhar|entrou|caiu|salario|renda|vendi|vender|faturei)\b/.test(normalized) ? "receita" : "despesa";
+  let description = raw.replace(amountMatch[0], " ")
+    .replace(/\b(?:todo|toda|todos|todas)\s+(?:a\s+)?(?:semana|m[eê]s|mes|ano)\b/ig, " ")
+    .replace(/\b(?:a cada|semanalmente|mensalmente|anualmente|semanal|mensal|anual|recorrente|recorrência|recorrencia)\b/ig, " ")
+    .replace(/\b(?:por favor|quero|preciso|crie|criar|registre|registrar|lance|lançar|lancar|programe|programar|automaticamente|receita|despesa|recebo|receber|ganho|ganhar|entrou|caiu|cai|vendi|vender|faturei|pago|pagar|pagarei|paguei|pague|gasto|gastar|desconto|cobrado|cobrada)\b/ig, " ")
+    .replace(/\b(?:reais?|de|do|da|para|por|no|na|em|com|todo|toda|meu|minha|um|uma)\b/ig, " ")
+    .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "").slice(0, 180);
+  if (!description) description = kind === "receita" ? "Receita recorrente" : "Despesa recorrente";
+  const label = frequency === "weekly" ? "semanal" : frequency === "yearly" ? "anual" : "mensal";
+  return "/recorrente " + kind + " " + amount + " " + description + " " + label + " " + nextNaturalRecurringDate(frequency);
+}
+
+function naturalBudgetCommand(raw: string, normalized: string): string | null {
+  const intent = /\b(?:orcamento|orcamentos|limite de gastos?|limitar gastos?|gastar no maximo|gastar ate|teto de gastos?)\b/.test(normalized);
+  if (!intent) return null;
+  const amounts = [...raw.matchAll(/(?<![\d.,])(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?(?![\d.,])/gi)];
+  if (!amounts.length) return null;
+  const amountMatch = amounts[amounts.length - 1];
+  const amount = amountMatch[0].replace(/^R\$/i, "").replace(/\s/g, "");
+  const category = raw.replace(amountMatch[0], " ")
+    .replace(/\b(?:por favor|quero|preciso|defina|definir|crie|criar|coloque|configurar|configure|estabeleça|estabeleca|estabelecer|limite|limitar|meu|minha|mensal|mensalmente|orcamento|orçamento|orcamentos|orçamentos|gasto|gastos|gastar|maximo|ate|teto|reais?|valor|de|do|da|para|em|com|no|na|a|um|uma|por mes)\b/ig, " ")
+    .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "");
+  if (!category) return null;
+  return "/orcamento " + category + " " + amount;
+}
+
+function normalizeNaturalCommand(raw: string, preferences: Record<string, unknown>): string {
+  const text = raw.trim();
+  if (!text || text.startsWith("/")) return text;
+  const normalized = normalizeText(text).replace(/[!?.,]+$/g, "").replace(/\s+/g, " ");
+  const pendingEdit = preferences.pending_transaction_edit as { id?: string; created_at?: string } | undefined;
+  const editTime = pendingEdit?.created_at ? Date.parse(pendingEdit.created_at) : 0;
+  if (pendingEdit?.id && editTime && Date.now() - editTime <= 10 * 60 * 1000 && !/^(?:cancelar|cancela|deixa pra la|deixa quieto|desisti|esquece)$/i.test(normalized)) return text;
+
+  if (/^(?:cancelar|cancela|cancela isso|deixa pra la|deixa quieto|desisti|esquece|nao quero mais|cancela a operacao)$/i.test(normalized)) return "/cancelar";
+  const pendingDelete = preferences.pending_transaction_delete as { id?: string; created_at?: string } | undefined;
+  const deleteTime = pendingDelete?.created_at ? Date.parse(pendingDelete.created_at) : 0;
+  const pendingDeleteActive = Boolean(pendingDelete?.id && deleteTime && Date.now() - deleteTime <= 10 * 60 * 1000);
+  if (pendingDeleteActive && /^(?:sim|sim pode|pode|confirmo|confirmar|confirmo a exclusao|pode excluir|pode apagar|exclua|apague|isso mesmo|confirmado)$/i.test(normalized)) return "/confirmar";
+  if (/^(?:oi|ola|bom dia|boa tarde|boa noite|ajuda|o que voce faz|como voce funciona)$/i.test(normalized)) return "/start";
+
+  if (/\b(?:meus lembretes|quais lembretes|listar lembretes|mostrar lembretes|tenho lembretes|ver lembretes)\b/.test(normalized)) return "/lembretes";
+  if (/\b(?:meus lancamentos recorrentes|minhas recorrencias|quais recorrencias|ver recorrencias|listar recorrencias|minhas contas fixas|minhas despesas fixas)\b/.test(normalized)) return "/recorrentes";
+  if (/\b(?:meus orcamentos|ver meus orcamentos|acompanhar orcamento|como esta meu orcamento|mostrar orcamentos|listar orcamentos)\b/.test(normalized) && !/\d/.test(normalized)) return "/orcamentos";
+
+  const reminderCommand = naturalReminderCommand(text, normalized);
+  if (reminderCommand) return reminderCommand;
+  const recurringCommand = naturalRecurringCommand(text, normalized);
+  if (recurringCommand) return recurringCommand;
+  const budgetCommand = naturalBudgetCommand(text, normalized);
+  if (budgetCommand) return budgetCommand;
+
+  if (/\b(?:editar|edite|corrigir|corrija|alterar|altere|modificar|modifique)\b.*\b(?:lancamento|transacao|despesa|receita|gasto|movimentacao)\b|\b(?:editar|corrigir|alterar)\s+(?:meu\s+)?(?:ultimo|ultima)\s+(?:lancamento|gasto|despesa|receita)\b/.test(normalized)) {
+    const m = normalized.match(/\b(?:lancamento|transacao|gasto|despesa|receita)\s*(?:numero\s*)?(\d+)\b/);
+    const ord = normalized.match(/\b(primeiro|primeira|segundo|segunda|terceiro|terceira|ultimo|ultima)\b/);
+    const map: Record<string, number> = { primeiro: 1, primeira: 1, segundo: 2, segunda: 2, terceiro: 3, terceira: 3, ultimo: 1, ultima: 1 };
+    return ("/editar " + (m?.[1] ? String(Number(m[1])) : ord?.[1] ? String(map[ord[1]]) : "")).trim();
+  }
+  if (/\b(?:excluir|exclua|apagar|apague|remover|remova|deletar|delete)\b.*\b(?:lancamento|transacao|despesa|receita|gasto|movimentacao)\b|\b(?:quero|preciso)\s+(?:excluir|apagar|remover|deletar)\b/.test(normalized)) {
+    const m = normalized.match(/\b(?:lancamento|transacao|gasto|despesa|receita)\s*(?:numero\s*)?(\d+)\b/);
+    const ord = normalized.match(/\b(primeiro|primeira|segundo|segunda|terceiro|terceira|ultimo|ultima)\b/);
+    const map: Record<string, number> = { primeiro: 1, primeira: 1, segundo: 2, segunda: 2, terceiro: 3, terceira: 3, ultimo: 1, ultima: 1 };
+    return ("/excluir " + (m?.[1] ? String(Number(m[1])) : ord?.[1] ? String(map[ord[1]]) : "")).trim();
+  }
+  if (/\b(?:pausar|pause|pausa|desativar|desative)\b.*\b(?:recorrencia|lancamento recorrente|conta fixa)\b/.test(normalized)) {
+    const m = normalized.match(/\b(?:recorrencia|lancamento|conta)\s*(?:numero\s*)?(\d+)\b/);
+    const ord = normalized.match(/\b(primeiro|primeira|segundo|segunda|terceiro|terceira)\b/);
+    const map: Record<string, number> = { primeiro: 1, primeira: 1, segundo: 2, segunda: 2, terceiro: 3, terceira: 3 };
+    return ("/pausarrecorrente " + (m?.[1] ? String(Number(m[1])) : ord?.[1] ? String(map[ord[1]]) : "")).trim();
+  }
+  if (/\b(?:cancele|cancelar|cancela|apague|apagar|exclua|excluir|remova|remover)\b.*\b(?:lembrete|lembretes)\b/.test(normalized)) {
+    const m = normalized.match(/\blembrete\s*(?:numero\s*)?(\d+)\b/);
+    return m?.[1] ? "/cancelarlembrete " + Number(m[1]) : "/lembretes";
+  }
+
+  if (parseEntry(text)) return text;
+  if (/\b(?:saldo|quanto tenho|quanto dinheiro tenho|dinheiro disponivel|quanto sobrou|quanto ainda tenho)\b/.test(normalized)) return "/saldo";
+  if (/\b(?:resumo|como estao minhas financas|como estou financeiramente|quanto recebi|quanto gastei|resultado do mes)\b/.test(normalized)) return "/resumo";
+  if (/\b(?:relatorio financeiro|analise financeira|onde estou gastando mais|maiores gastos|analise do mes)\b/.test(normalized)) return "/relatorio";
+  if (/\b(?:ultimos lancamentos|ultimas movimentacoes|ultimos gastos|o que registrei|o que eu registrei|movimentacoes recentes)\b/.test(normalized)) return "/ultimas";
+  if (/\b(?:minhas categorias|quais categorias|listar categorias|ver categorias)\b/.test(normalized)) return "/categorias";
+  if (/\b(?:orcamento|orcamentos|limite de gastos?|meu limite mensal)\b/.test(normalized)) return "/orcamentos";
+  return text;
+}
+
 async function sendText(chatId: number, userId: string, text: string) {
   const savedUser = await db("conversation_messages", {
     method: "POST", headers: { Prefer: "return=minimal" },
     body: JSON.stringify({ user_id: userId, role: "user", content: text }),
   });
   if (!savedUser.ok) throw new Error("Could not save incoming message");
-  const entry = parseEntry(text);
+  const originalText = text;
   const editPreferences = await readPreferences(userId);
+  text = normalizeNaturalCommand(originalText, editPreferences);
+  const entry = parseEntry(text);
   const pendingEdit = editPreferences.pending_transaction_edit as { id?: string; created_at?: string } | undefined;
   const pendingEditCreatedAt = pendingEdit?.created_at ? Date.parse(pendingEdit.created_at) : 0;
   const pendingEditValid = Boolean(pendingEdit?.id && pendingEditCreatedAt && Date.now() - pendingEditCreatedAt <= 10 * 60 * 1000);
@@ -269,7 +463,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     } else if (!index) {
       answer = "✏️ <b>Qual lançamento deseja editar?</b>\n\n" +
         rows.map((row, i) => `${i + 1}. ${row.kind === "income" ? "🟢 Receita" : "🔴 Despesa"} · <b>${money(Number(row.amount) || 0)}</b>\n   ${escapeHtml(row.description || "Sem descrição")} · ${new Date(row.occurred_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" })}`).join("\n\n") +
-        "\n\nEnvie <code>/editar 1</code> para escolher. Depois, envie o novo valor e a descrição, por exemplo <code>35,90 almoço e café</code>. A edição expira em 10 minutos. Use /cancelar para desistir.";
+        "\n\nDiga <b>“editar lançamento 1”</b> para escolher. Depois, envie o novo valor e a descrição, por exemplo <code>35,90 almoço e café</code>. A edição expira em 10 minutos. Diga <b>“cancelar”</b> para desistir.";
     } else if (index < 1 || index > rows.length) {
       answer = `Escolha um número entre 1 e ${rows.length}. Envie /editar para ver a lista novamente.`;
     } else {
@@ -289,7 +483,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     } else if (!index) {
       answer = "🗑️ <b>Qual lançamento deseja excluir?</b>\n\n" +
         rows.map((row, i) => `${i + 1}. ${row.kind === "income" ? "🟢 Receita" : "🔴 Despesa"} · <b>${money(Number(row.amount) || 0)}</b>\n   ${escapeHtml(row.description || "Sem descrição")} · ${new Date(row.occurred_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" })}`).join("\n\n") +
-        "\n\nEnvie <code>/excluir 1</code> para selecionar o primeiro item. A exclusão só ocorre após <code>/confirmar</code>. Para desistir, envie <code>/cancelar</code>.";
+        "\n\nDiga <b>“excluir lançamento 1”</b> para selecionar um item. Eu sempre pedirei confirmação antes de apagar. Para desistir, diga <b>“cancelar”</b>.";
     } else if (index < 1 || index > rows.length) {
       answer = `Escolha um número entre 1 e ${rows.length}. Envie /excluir para ver a lista novamente.`;
     } else {
@@ -297,7 +491,7 @@ async function sendText(chatId: number, userId: string, text: string) {
       const preferences = await readPreferences(userId);
       preferences.pending_transaction_delete = { id: chosen.id, created_at: new Date().toISOString() };
       await writePreferences(userId, preferences);
-      answer = `⚠️ <b>Confirme a exclusão</b>\n\n${chosen.kind === "income" ? "Receita" : "Despesa"}: <b>${money(Number(chosen.amount) || 0)}</b>\nDescrição: ${escapeHtml(chosen.description || "Sem descrição")}\n\nEnvie <code>/confirmar</code> para excluir este lançamento ou <code>/cancelar</code> para manter.`;
+      answer = `⚠️ <b>Confirme a exclusão</b>\n\n${chosen.kind === "income" ? "Receita" : "Despesa"}: <b>${money(Number(chosen.amount) || 0)}</b>\nDescrição: ${escapeHtml(chosen.description || "Sem descrição")}\n\nResponda <b>“confirmo a exclusão”</b> para apagar ou <b>“cancelar”</b> para manter.`;
     }
   } else if (/^\/orcamento(?:\s+.+)?$/i.test(text.trim())) {
     const raw = text.trim().replace(/^\/orcamento\s*/i, "").trim();
@@ -412,7 +606,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     if (!response.ok) throw new Error("Could not read recurring rules");
     const rows = await response.json();
     answer = Array.isArray(rows) && rows.length
-      ? "🔁 <b>Seus lançamentos recorrentes</b>\n\n" + rows.map((r: any, i: number) => (i + 1) + ". " + (r.active ? "🟢" : "⏸️") + " <b>" + money(Number(r.amount) || 0) + "</b> · " + (r.kind === "income" ? "Receita" : "Despesa") + "\n   " + escapeHtml(r.description) + " · " + (({weekly:"semanal",monthly:"mensal",yearly:"anual"} as Record<string,string>)[r.frequency] || r.frequency) + "\n   Próxima: " + new Date(r.next_run_at + "T12:00:00Z").toLocaleDateString("pt-BR", {timeZone:"UTC"})).join("\n\n") + "\n\nPara pausar, use <code>/pausarrecorrente 1</code> (número da lista)."
+      ? "🔁 <b>Seus lançamentos recorrentes</b>\n\n" + rows.map((r: any, i: number) => (i + 1) + ". " + (r.active ? "🟢" : "⏸️") + " <b>" + money(Number(r.amount) || 0) + "</b> · " + (r.kind === "income" ? "Receita" : "Despesa") + "\n   " + escapeHtml(r.description) + " · " + (({weekly:"semanal",monthly:"mensal",yearly:"anual"} as Record<string,string>)[r.frequency] || r.frequency) + "\n   Próxima: " + new Date(r.next_run_at + "T12:00:00Z").toLocaleDateString("pt-BR", {timeZone:"UTC"})).join("\n\n") + "\n\nPara pausar, diga <b>“pausar recorrência 1”</b> (número da lista)."
       : "Você ainda não tem recorrências. Exemplo: <code>/recorrente despesa 120 aluguel mensal 2026-11-05</code>";
   } else if (/^\/pausarrecorrente\s+\d+\s*$/i.test(text.trim())) {
     const index = Number(text.trim().match(/^\/pausarrecorrente\s+(\d+)/i)?.[1] || 0);
@@ -430,7 +624,9 @@ async function sendText(chatId: number, userId: string, text: string) {
   } else if (/^\/lembrete(?:\s+.*)?$/i.test(text.trim())) {
     const match = text.trim().match(/^\/lembrete\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})\s+(.+)$/i);
     if (!match) {
-      answer = "⏰ <b>Criar lembrete</b>\nUse: <code>/lembrete 2026-11-05 09:00 pagar conta de luz</code>\nHorário de Brasília. A data e hora devem ser futuras.";
+      answer = originalText.trim().startsWith("/")
+        ? "⏰ <b>Criar lembrete</b>\\nDiga, por exemplo: <b>Me lembre amanhã às 9 de pagar a conta de luz</b> ou <b>Me avise em 15 minutos de beber água</b>.\\nInforme uma data e um horário futuros."
+        : "Claro! O que devo te lembrar e quando? Diga, por exemplo: <b>amanhã às 9, pagar a conta de luz</b> ou <b>em 15 minutos, beber água</b>.";
     } else {
       const date = match[1], hh = match[2], mm = match[3], title = match[4].trim().slice(0, 180);
       const hour = Number(hh), minute = Number(mm);
@@ -522,9 +718,9 @@ async function sendText(chatId: number, userId: string, text: string) {
     const label = entry.kind === "income" ? "Receita" : "Despesa";
     answer = `✅ <b>${label} registrada</b>\nValor: <b>${entry.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\nDescrição: ${escapeHtml(entry.description)}\n\nCategoria automática: ${escapeHtml(category.name)} ${category.icon}.${budgetNotice}`;
   } else if (/^\/(start|ajuda|help)\b/i.test(text.trim())) {
-    answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nPosso começar registrando receitas e despesas por texto. Exemplos:\n• Gastei 25,90 no almoço\n• Paguei 120 conta de luz\n• Recebi 200 de um freela\n\nComandos: /saldo, /resumo, /ultimas, /editar, /excluir, /orcamento, /orcamentos, /relatorio, /categorias, /recorrente, /recorrentes, /lembrete e /lembretes.";
+    answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nConverse comigo normalmente. Eu registro receitas e despesas, acompanho seus orçamentos, consulto seu saldo e crio lembretes e lançamentos recorrentes.\n\nVocê pode dizer:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Todo mês pago 1.200 de aluguel";
   } else {
-    answer = "Ainda não consegui identificar um lançamento com segurança.\n\nTente: <b>Gastei 25,90 no almoço</b> ou <b>Recebi 200 de um freela</b>. Comandos: /saldo, /resumo, /ultimas, /orcamento, /orcamentos, /relatorio, /categorias, /editar, /excluir, /recorrente, /recorrentes, /lembrete e /lembretes.";
+    answer = "Ainda não consegui entender esse pedido com segurança.\n\nPode falar comigo de forma natural, por exemplo:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• Como estão minhas finanças este mês?\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Defina meu orçamento de alimentação em 500 reais\n\nPara editar ou apagar um lançamento, também pode pedir isso em palavras. Antes de excluir, vou pedir confirmação.";
   }
   const savedAssistant = await db("conversation_messages", {
     method: "POST", headers: { Prefer: "return=minimal" },
