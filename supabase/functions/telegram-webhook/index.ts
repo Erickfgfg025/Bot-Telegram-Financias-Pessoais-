@@ -592,7 +592,7 @@ async function sendText(chatId: number, userId: string, text: string) {
   let aiBatchTransactions: FinancialEntry[] | null = null;
 
   // Guardar pedidos explícitos de memória sem depender da classificação do modelo de IA.
-  const explicitMemoryMatch = originalText.match(/^\\s*(?:iris[,:;]?\\s*)?(?:lembra|lembre-se|guarda|guarde|memoriza|memorize|anota|anote|salva|salve)\\s+(?:que\\s+)?(.+?)\\s*[.!?]*\\s*$/i);
+  const explicitMemoryMatch = originalText.match(/^\\s*(?:[ií]ris[,:;]?\\s*)?(?:lembra|lembre-se|guarda|guarde|memoriza|memorize|anota|anote|salva|salve)\\s+(?:que\\s+)?(.+?)\\s*[.!?]*\\s*$/i);
   if (explicitMemoryMatch && !/^(?:o que|qual|quem|quando|onde|como)\\b/i.test(explicitMemoryMatch[1].trim())) {
     const rawFacts = explicitMemoryMatch[1].trim().replace(/[.!?]+$/, "");
     const additions = rawFacts.split(/\\s+e que\\s+/i).map((fact: string) => fact.trim()).filter((fact: string) => fact.length >= 4);
