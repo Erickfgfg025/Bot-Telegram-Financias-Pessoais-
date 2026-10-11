@@ -10,7 +10,7 @@ A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como
 - Editar lançamentos com /editar e /editar 1; a alteração expira em 10 minutos.
 - Excluir com confirmação usando /excluir, seleção do item e /confirmar.
 - Definir orçamento mensal por categoria com /orcamento alimentação 500.
-- Consultar progresso do orçamento com /orcamentos, incluindo aviso ao atingir 80% e 100% do limite.
+- Consultar progresso do orçamento com /orcamentos, incluindo aviso ao atingir 80% e 100% do limite.\n- Receber alertas imediatos quando um novo gasto cruzar 80% ou 100% do orçamento da categoria.\n- Consultar /relatorio para receitas, despesas, resultado do mês, taxa de economia e até cinco maiores categorias de gastos.
 - Listar categorias com /categorias.
 - Histórico de mensagens e processamento idempotente de updates do Telegram.
 
@@ -28,7 +28,7 @@ A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como
 - Esquema inicial aplicado; 14 tabelas verificadas com RLS habilitado.
 - Edge Function telegram-webhook publicada.
 - O webhook ainda exige TELEGRAM_BOT_TOKEN e TELEGRAM_WEBHOOK_SECRET para processar mensagens.
-- Webhook ativo na versão 12.
+- Webhook ativo na versão 13.
 - O parser de lançamentos continua determinístico e baseado em padrões simples. Categorias automáticas também usam palavras-chave, então descrições ambíguas podem cair em “Outros gastos” ou “Outras receitas”.
 - Os orçamentos são consultados sob demanda com /orcamentos. Alertas automáticos por mensagem, voz, IA externa, embeddings ativos e lembretes agendados ainda não estão ativados.
 
@@ -39,7 +39,7 @@ A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como
 3. URL da função: https://njyfrmvryigzgojyvgxt.supabase.co/functions/v1/telegram-webhook
 4. Configure o webhook do Telegram para essa URL, enviando o mesmo valor de TELEGRAM_WEBHOOK_SECRET como parâmetro secret_token.
 5. Teste /start e registre um lançamento de teste como “Gastei 25,90 no almoço”.
-6. Confira /categorias; defina um limite com /orcamento alimentação 500 e consulte /orcamentos.
+6. Confira /categorias; defina um limite com /orcamento alimentação 500, consulte /orcamentos e gere /relatorio.
 7. Para editar, use /editar, escolha com /editar 1 e envie o novo valor e descrição. Para excluir, use /excluir e confirme com /confirmar.
 8. Se houver erro, consulte os logs da Edge Function antes de repetir lançamentos para evitar duplicações.
 
