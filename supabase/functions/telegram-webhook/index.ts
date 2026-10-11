@@ -145,9 +145,9 @@ async function sendText(chatId: number, userId: string, text: string) {
     if (!rows.length) {
       answer = "📭 Não há lançamentos para excluir.";
     } else if (!index) {
-      answer = "🗑️ <b>Qual lançamento deseja excluir?</b>\\n\\n" +
-        rows.map((row, i) => `${i + 1}. ${row.kind === "income" ? "🟢 Receita" : "🔴 Despesa"} · <b>${money(Number(row.amount) || 0)}</b>\\n   ${escapeHtml(row.description || "Sem descrição")} · ${new Date(row.occurred_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" })}`).join("\\n\\n") +
-        "\\n\\nEnvie <code>/excluir 1</code> para selecionar o primeiro item. A exclusão só ocorre após <code>/confirmar</code>. Para desistir, envie <code>/cancelar</code>.";
+      answer = "🗑️ <b>Qual lançamento deseja excluir?</b>\n\n" +
+        rows.map((row, i) => `${i + 1}. ${row.kind === "income" ? "🟢 Receita" : "🔴 Despesa"} · <b>${money(Number(row.amount) || 0)}</b>\n   ${escapeHtml(row.description || "Sem descrição")} · ${new Date(row.occurred_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" })}`).join("\n\n") +
+        "\n\nEnvie <code>/excluir 1</code> para selecionar o primeiro item. A exclusão só ocorre após <code>/confirmar</code>. Para desistir, envie <code>/cancelar</code>.";
     } else if (index < 1 || index > rows.length) {
       answer = `Escolha um número entre 1 e ${rows.length}. Envie /excluir para ver a lista novamente.`;
     } else {
@@ -155,7 +155,7 @@ async function sendText(chatId: number, userId: string, text: string) {
       const preferences = await readPreferences(userId);
       preferences.pending_transaction_delete = { id: chosen.id, created_at: new Date().toISOString() };
       await writePreferences(userId, preferences);
-      answer = `⚠️ <b>Confirme a exclusão</b>\\n\\n${chosen.kind === "income" ? "Receita" : "Despesa"}: <b>${money(Number(chosen.amount) || 0)}</b>\\nDescrição: ${escapeHtml(chosen.description || "Sem descrição")}\\n\\nEnvie <code>/confirmar</code> para excluir este lançamento ou <code>/cancelar</code> para manter.`;
+      answer = `⚠️ <b>Confirme a exclusão</b>\n\n${chosen.kind === "income" ? "Receita" : "Despesa"}: <b>${money(Number(chosen.amount) || 0)}</b>\nDescrição: ${escapeHtml(chosen.description || "Sem descrição")}\n\nEnvie <code>/confirmar</code> para excluir este lançamento ou <code>/cancelar</code> para manter.`;
     }
   } else if (/^\/saldo\b/i.test(text.trim())) {
     const rows = await getTransactions(userId);
