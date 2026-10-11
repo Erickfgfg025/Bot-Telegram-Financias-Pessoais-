@@ -1,67 +1,72 @@
-# Íris 💜 | Finanças pessoais no Telegram
+# Íris 💜 | Assistente pessoal no Telegram
 
-A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como banco e backend. O projeto começa priorizando serviços gratuitos e não ativa recursos pagos automaticamente.
+A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como banco e backend. O projeto prioriza um custo inicial de R$ 0 e não ativa recursos pagos automaticamente.
 
-## Funcionalidades disponíveis
+## Funcionalidades
 
-- Registrar receitas e despesas por texto.
-- Categorizar lançamentos automaticamente por palavras-chave, com categorias por usuário.
-- Consultar saldo, resumo mensal e últimos lançamentos.
-- Editar lançamentos com /editar e /editar 1; a alteração expira em 10 minutos.
-- Excluir com confirmação usando /excluir, seleção do item e /confirmar.
-- Definir orçamento mensal por categoria com /orcamento alimentação 500.
-- Consultar progresso do orçamento com /orcamentos, incluindo aviso ao atingir 80% e 100% do limite.\n- Receber alertas imediatos quando um novo gasto cruzar 80% ou 100% do orçamento da categoria.\n- Consultar /relatorio para receitas, despesas, resultado do mês, taxa de economia e até cinco maiores categorias de gastos.
-- Listar categorias com /categorias.
-- Histórico de mensagens e processamento idempotente de updates do Telegram.
-- Criar lançamentos recorrentes com `/recorrente despesa 120 aluguel mensal 2026-11-05`, listar com `/recorrentes` e pausar com `/pausarrecorrente 1`.
-- Criar lembretes com `/lembrete 2026-11-05 09:00 pagar conta de luz`, listar com `/lembretes` e cancelar com `/cancelarlembrete 1`.
+- Registrar receitas e despesas com linguagem natural, por exemplo: "Recebi 1.000 reais de um freela", "Paguei 120 de conta de luz" e "Gastei 25,90 no almoço".
+- Interpretar valores brasileiros como `1000`, `1.000`, `1.000,50` e `1000,50`.
+- Categorizar lançamentos automaticamente por palavras-chave.
+- Consultar saldo, resumo mensal, últimos lançamentos, categorias e relatório financeiro.
+- Editar lançamentos por conversa, com expiração da operação após 10 minutos.
+- Excluir lançamentos somente após confirmação explícita.
+- Definir e acompanhar orçamentos por categoria, com alertas ao cruzar 80% e 100% do limite.
+- Criar/listar/cancelar lembretes e criar/listar/pausar lançamentos recorrentes usando linguagem natural.
+- Processar mensagens de texto e, com a API Gemini configurada, receber áudios do Telegram, transcrevê-los e responder por texto.
+- Manter histórico de conversas e processar atualizações do Telegram com controle de duplicidade.
 
-## Próximas etapas
+## Conversa por IA e áudio (opcional)
 
-- Contas e transferências completas.
-- Metas, dívidas e pagamentos.
-- Relatórios mais detalhados e alertas proativos.
-- Conversa contextual avançada, memória semântica e entrada por voz.
-- Melhorias de interpretação de linguagem natural com fallback determinístico.
+O webhook inclui integração opcional com o modelo `gemini-3.1-flash-lite` para interpretar pedidos não reconhecidos pelas regras existentes e responder sobre assuntos gerais. Também usa o modelo para transcrever áudios curtos enviados como mensagem de voz.
 
-## Estado atual
+Para ativar:
 
-- Projeto Supabase criado na região São Paulo.
-- Esquema inicial aplicado; 14 tabelas verificadas com RLS habilitado.
-- Edge Function telegram-webhook publicada.
-- O webhook ainda exige TELEGRAM_BOT_TOKEN e TELEGRAM_WEBHOOK_SECRET para processar mensagens.
-- A função `iris-scheduler` foi publicada para processar lembretes vencidos e recorrências; a execução automática depende de configurar `IRIS_SCHEDULER_SECRET` nas Edge Function Secrets e guardar o mesmo valor no Supabase Vault antes de ativar o Cron.
-- Webhook ativo na versão 13.
-- O parser de lançamentos continua determinístico e baseado em padrões simples. Categorias automáticas também usam palavras-chave, então descrições ambíguas podem cair em “Outros gastos” ou “Outras receitas”.
-- Os orçamentos são consultados sob demanda com /orcamentos. Alertas automáticos por mensagem, voz, IA externa, embeddings ativos e lembretes agendados ainda não estão ativados.
+1. Crie uma chave de API no [Google AI Studio](https://aistudio.google.com/app/apikey).
+2. No painel do [projeto Íris no Supabase](https://supabase.com/dashboard/project/njyfrmvryigzgojyvgxt/settings/functions), abra os secrets das Edge Functions e adicione `GEMINI_API_KEY` com o valor da chave.
+3. Não cole a chave no Telegram, nesta conversa ou no GitHub. Não a coloque no código.
+4. Envie uma mensagem em texto que não seja um comando financeiro conhecido ou uma mensagem de voz curta para testar.
 
-## Configuração do webhook
+A integração é opcional: sem `GEMINI_API_KEY`, os fluxos determinísticos e as operações financeiras existentes continuam disponíveis, mas a IA geral e a transcrição de áudio não funcionam.
 
-1. No Supabase, abra o projeto Iris e configure os secrets TELEGRAM_BOT_TOKEN e TELEGRAM_WEBHOOK_SECRET para Edge Functions.
-2. Não coloque tokens ou a chave service role no GitHub ou nesta conversa.
-3. URL da função: https://njyfrmvryigzgojyvgxt.supabase.co/functions/v1/telegram-webhook
-4. Configure o webhook do Telegram para essa URL, enviando o mesmo valor de TELEGRAM_WEBHOOK_SECRET como parâmetro secret_token.
-5. Teste /start e registre um lançamento de teste como “Gastei 25,90 no almoço”.
-6. Confira /categorias; defina um limite com /orcamento alimentação 500, consulte /orcamentos e gere /relatorio.
-7. Para editar, use /editar, escolha com /editar 1 e envie o novo valor e descrição. Para excluir, use /excluir e confirme com /confirmar.
-8. Para recorrências, use `/recorrente receita|despesa VALOR DESCRIÇÃO semanal|mensal|anual AAAA-MM-DD`; para lembretes, `/lembrete AAAA-MM-DD HH:MM descrição` (horário de Brasília).
-9. O agendador usa a função `iris-scheduler`. Configure `IRIS_SCHEDULER_SECRET` nos secrets da Edge Function e salve o mesmo segredo no Vault com o nome `iris_scheduler_secret`. Depois, crie o job Cron que chama `/functions/v1/iris-scheduler` a cada 5 minutos usando `net.http_post` e o segredo do Vault no cabeçalho `x-iris-scheduler-secret`.
-8. Se houver erro, consulte os logs da Edge Function antes de repetir lançamentos para evitar duplicações.
+**Privacidade:** no nível gratuito da API Gemini, o conteúdo enviado pode ser usado pelo Google para melhorar seus produtos. Mensagens e áudios destinados à IA podem conter dados pessoais. Avise os usuários antes de habilitar essa função em um bot para clientes e não envie senhas, credenciais ou dados bancários completos. A API gratuita tem limites de uso que podem mudar. Consulte os [preços e condições atuais da API Gemini](https://ai.google.dev/gemini-api/docs/pricing).
 
-A função usa verify_jwt=false porque o Telegram não envia um JWT Supabase. Ela valida o cabeçalho secreto x-telegram-bot-api-secret-token. Sem o secret configurado, responde 503 e não processa mensagens.
+A Íris responde a áudio recebido com texto. Resposta de voz gerada pela IA (text-to-speech) ainda não está implementada.
 
-## Segurança
+### Sobre Ollama
 
-- Nunca commite tokens, chaves, arquivos .env ou dados financeiros reais.
-- O acesso ao banco é feito no servidor; a chave service role não deve ser exposta em clientes.
-- Todas as 14 tabelas iniciais têm RLS habilitado e não têm políticas de acesso público. O webhook usa acesso privilegiado somente no servidor.
-- O parser atual é determinístico e limitado. Não confie nele para interpretar pedidos complexos.
-- Totais e saldos futuros devem ser calculados no SQL/PostgreSQL, nunca inventados pelo modelo de linguagem.
+Ollama pode executar modelos localmente e é uma alternativa para reduzir o envio de dados a provedores externos. Para um bot hospedado no Supabase continuar respondendo enquanto o computador está desligado, contudo, seria necessário hospedar o modelo em outro servidor sempre ativo. O uso local é gratuito, mas depende do hardware, da memória e da disponibilidade desse servidor. A opção de nuvem do Ollama possui créditos/limites e pode exigir pagamento quando eles acabam.
 
-## Banco
+## Configuração do Telegram
 
-Migration: supabase/migrations/20261011182819_iris_initial_schema.sql
+1. Configure `TELEGRAM_BOT_TOKEN` e `TELEGRAM_WEBHOOK_SECRET` nos secrets das Edge Functions.
+2. Configure o webhook do Telegram para:
+   `https://njyfrmvryigzgojyvgxt.supabase.co/functions/v1/telegram-webhook`
+3. Use o mesmo valor de `TELEGRAM_WEBHOOK_SECRET` como `secret_token` na configuração do webhook.
+4. Envie uma mensagem como "Gastei 25,90 no almoço", pergunte "Quanto tenho de saldo?" e confira se a Íris responde.
+5. Para voz e conversa ampla com IA, configure também `GEMINI_API_KEY`.
 
-## Custo
+A função usa `verify_jwt=false` porque o Telegram não envia um JWT Supabase. O webhook valida o cabeçalho secreto `x-telegram-bot-api-secret-token`.
 
-Meta inicial: R$ 0. O valor consultado para a criação do projeto foi US$ 0/mês. Limites de planos gratuitos e de fornecedores externos podem mudar; não há autorização para upgrades pagos.
+## Agendador de lembretes e recorrências
+
+A função `iris-scheduler` executa a cada cinco minutos por meio de `pg_cron` e `pg_net`. O segredo de autenticação é mantido no Supabase Vault sob o nome `iris_scheduler_secret`; a função valida o cabeçalho `x-iris-scheduler-secret` via RPC. O valor secreto não deve ser incluído no repositório.
+
+O agendador envia lembretes vencidos e cria lançamentos recorrentes com chave de idempotência para evitar duplicação. Os logs do cron e das Edge Functions devem ser verificados ao diagnosticar falhas.
+
+## Segurança e limites
+
+- Nunca commite tokens, chaves, arquivos `.env` ou dados financeiros reais.
+- A chave `service_role` permanece exclusivamente no servidor.
+- As tabelas do projeto têm RLS habilitado; as operações privilegiadas são executadas no backend.
+- O modelo de linguagem pode ajudar a interpretar intenção, mas não deve inventar saldos ou confirmar ações que não foram executadas.
+- A IA só pode escolher entre operações permitidas. Consultas financeiras são executadas pelas funções existentes, e exclusões mantêm a confirmação.
+- Sem IA externa, a interpretação continua baseada em regras e pode não entender todas as frases.
+- O objetivo é manter o custo inicial em R$ 0. Os limites gratuitos de provedores podem mudar; não há autorização para upgrades pagos.
+
+## Repositório e implantação
+
+- Webhook: `supabase/functions/telegram-webhook/index.ts`
+- Agendador: `supabase/functions/iris-scheduler/index.ts`
+- Projeto Supabase: [Íris](https://supabase.com/dashboard/project/njyfrmvryigzgojyvgxt)
+
+Após qualquer mudança, sincronize o código com o GitHub e valide o comportamento no Telegram. Não registre segredos em commits ou documentação.
