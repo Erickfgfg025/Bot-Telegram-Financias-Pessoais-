@@ -206,7 +206,7 @@ function totals(rows: TransactionRow[]) {
 
 
 type GeminiPart = Record<string, unknown>;
-type GeminiDecision = { kind: "command" | "reply"; value: string };
+type GeminiDecision = { kind: "command" | "reply"; value: string } | { kind: "mixed"; value: string; reply: string };
 
 async function callGemini(parts: GeminiPart[], options: { responseJson?: boolean; system?: string; contents?: Array<{ role: string; parts: GeminiPart[] }> } = {}): Promise<string | null> {
   const apiKey = env("GEMINI_API_KEY");
@@ -226,10 +226,11 @@ async function callGemini(parts: GeminiPart[], options: { responseJson?: boolean
       responseSchema: {
         type: "OBJECT",
         properties: {
-          kind: { type: "STRING", enum: ["command", "reply"] },
+          kind: { type: "STRING", enum: ["command", "reply", "mixed"] },
           value: { type: "STRING" },
+          reply: { type: "STRING" },
         },
-        required: ["kind", "value"],
+        required: ["kind", "value", "reply"],
       },
     };
   }
@@ -286,6 +287,15 @@ async function transcribeTelegramAudio(fileId: string, suggestedMime: string): P
   return clean.slice(0, 3500);
 }
 
+function looksLikeMixedFinancialMessage(text: string): boolean {
+  if (!parseEntry(text)) return false;
+  const normalized = normalizeText(text);
+  const hasQuestionIntent = /\\b(?:o que|como|por que|porque|qual|quais|quem|onde|quando|me explica|explique|explica|me fale|fale sobre|gostaria de saber|pode explicar)\\b/.test(normalized);
+  const hasQuestionPunctuation = text.includes("?");
+  const financialStart = text.search(/\\b(?:recebi|ganhei|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou|gastei|paguei|comprei|despesa|debitei)\\b/i);
+  return financialStart > 0 && (hasQuestionPunctuation || hasQuestionIntent);
+}
+
 function isAllowedGeminiCommand(value: string): boolean {
   const v = value.trim();
   return /^\/(?:start|ajuda|saldo|resumo|ultimas|relatorio|categorias|orcamentos|recorrentes|lembretes)\s*$/i.test(v)
@@ -301,8 +311,9 @@ async function askGeminiIntent(userId: string, preferences: Record<string, unkno
     "Você é a Íris, uma assistente pessoal brasileira que conversa de forma natural, clara e respeitosa sobre qualquer assunto geral.",
     "Você está integrada a um bot financeiro, mas NÃO tem autorização para inventar saldo, transações, lembretes, orçamentos ou qualquer dado pessoal.",
     "Para perguntas sobre dados reais do usuário, use apenas comandos permitidos que façam a aplicação consultar o banco. Se não houver comando adequado, explique a limitação e pergunte o que a pessoa quer fazer.",
-    "Responda sempre como JSON válido com exatamente duas propriedades: kind e value. kind deve ser command ou reply.",
-    "Use kind=command apenas quando o pedido puder ser executado por uma operação existente. value deve ser um comando permitido, ou uma frase de lançamento financeiro inequívoca começando por Recebi, Ganhei, Gastei, Paguei, Comprei, Vendi, Entrou ou Caiu.",
+    "Responda sempre como JSON válido com exatamente três propriedades: kind, value e reply. kind deve ser command, reply ou mixed. Para command ou reply, preencha reply com string vazia.",
+    "Use kind=command quando o pedido for uma operação existente; value deve ser o comando permitido ou uma frase de lançamento financeiro inequívoca.",
+    "IMPORTANTE: se a mesma mensagem contiver uma pergunta/conversa geral E um lançamento financeiro explícito, use kind=mixed. Em value coloque SOMENTE a frase do lançamento financeiro, preservando a descrição real do serviço/produto, sem incluir a pergunta. Em reply coloque SOMENTE a resposta à pergunta. Exemplo: mensagem \"O que é inflação? Recebi 10 reais por um serviço\" => kind=mixed, value=\"Recebi 10 reais por um serviço\", reply=\"Inflação é...\". Nunca misture o texto da pergunta na descrição da receita/despesa.",
     "Comandos permitidos: /start, /saldo, /resumo, /relatorio, /ultimas, /categorias, /orcamentos, /recorrentes, /lembretes, /editar [número], /excluir [número], /confirmar, /cancelar, /cancelarlembrete [número], /pausarrecorrente [número], /lembrete [AAAA-MM-DD HH:MM título], /orcamento [categoria] [valor], /recorrente [receita|despesa] [valor] [descrição] [semanal|mensal|anual] [AAAA-MM-DD].",
     "Se faltar informação para uma operação, use kind=reply e faça uma pergunta curta. Nunca invente valores, datas, categorias ou itens.",
     "Excluir ou modificar dados só pode passar pelo fluxo de confirmação já existente; não diga que uma ação foi concluída quando você só a sugeriu.",
@@ -320,10 +331,15 @@ async function askGeminiIntent(userId: string, preferences: Record<string, unkno
     const raw = await callGemini([], { responseJson: true, system, contents: history });
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if ((parsed?.kind !== "command" && parsed?.kind !== "reply") || typeof parsed?.value !== "string") return null;
+    if (!["command", "reply", "mixed"].includes(parsed?.kind) || typeof parsed?.value !== "string") return null;
     const value = parsed.value.trim().slice(0, 3500);
     if (!value) return null;
     if (parsed.kind === "reply") return { kind: "reply", value };
+    if (parsed.kind === "mixed") {
+      const mixedReply = typeof parsed.reply === "string" ? parsed.reply.trim().slice(0, 2500) : "";
+      if (!mixedReply || !parseEntry(value)) return null;
+      return { kind: "mixed", value, reply: mixedReply };
+    }
     const normalized = normalizeNaturalCommand(value, preferences);
     if (isAllowedGeminiCommand(normalized) || parseEntry(value)) return { kind: "command", value: parseEntry(value) ? value : normalized };
     return null;
@@ -536,10 +552,15 @@ async function sendText(chatId: number, userId: string, text: string) {
   const pendingAtStartTime = pendingAtStart?.created_at ? Date.parse(pendingAtStart.created_at) : 0;
   const editingAtStart = Boolean(pendingAtStart?.id && pendingAtStartTime && Date.now() - pendingAtStartTime <= 10 * 60 * 1000);
   let aiConversationReply: string | null = null;
-  if (!text.startsWith("/") && text === originalText && !parseEntry(text) && !editingAtStart) {
+  let aiSupplementaryReply: string | null = null;
+  if (!text.startsWith("/") && text === originalText && (!parseEntry(text) || looksLikeMixedFinancialMessage(text)) && !editingAtStart) {
     const aiDecision = await askGeminiIntent(userId, editPreferences);
     if (aiDecision?.kind === "reply") aiConversationReply = aiDecision.value;
     else if (aiDecision?.kind === "command") text = aiDecision.value;
+    else if (aiDecision?.kind === "mixed") {
+      text = aiDecision.value;
+      aiSupplementaryReply = aiDecision.reply;
+    }
   }
   const entry = parseEntry(text);
   const pendingEdit = editPreferences.pending_transaction_edit as { id?: string; created_at?: string } | undefined;
@@ -862,6 +883,9 @@ async function sendText(chatId: number, userId: string, text: string) {
     answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nConverse comigo normalmente. Eu registro receitas e despesas, acompanho seus orçamentos, consulto seu saldo e crio lembretes e lançamentos recorrentes.\n\nVocê pode dizer:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Todo mês pago 1.200 de aluguel\n\n🔒 Quando a IA estiver ativada, mensagens e áudios serão processados pelo Google Gemini. No nível gratuito, o conteúdo pode ser usado pelo Google para melhorar produtos. Evite enviar senhas ou dados bancários completos.";
   } else {
     answer = "Ainda não consegui entender esse pedido com segurança.\n\nPode falar comigo de forma natural, por exemplo:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• Como estão minhas finanças este mês?\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Defina meu orçamento de alimentação em 500 reais\n\nPara editar ou apagar um lançamento, também pode pedir isso em palavras. Antes de excluir, vou pedir confirmação.";
+  }
+  if (aiSupplementaryReply && entry && !aiConversationReply) {
+    answer = `💬 <b>Resposta</b>\n${escapeHtml(aiSupplementaryReply)}\n\n${answer}`;
   }
   const [savedAssistant] = await Promise.all([
     db("conversation_messages", {
