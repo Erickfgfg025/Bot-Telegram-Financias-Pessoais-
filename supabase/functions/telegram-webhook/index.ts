@@ -342,6 +342,40 @@ async function sendText(chatId: number, userId: string, text: string) {
       });
       answer = `🎯 <b>Orçamentos de ${escapeHtml(range.label)}</b>\n\n${lines.join("\n\n")}\n\n<i>Os gastos são calculados a partir dos lançamentos categorizados do mês.</i>`;
     }
+  } else if (/^\/relatorio\b/i.test(text.trim())) {
+    const range = monthRange();
+    await backfillCategories(userId, range.start, range.end);
+    const [rows, categoriesResponse] = await Promise.all([
+      getTransactions(userId, { from: range.start, to: range.end, limit: 1000 }),
+      db(`categories?user_id=eq.${encodeURIComponent(userId)}&select=id,name,kind,icon`),
+    ]);
+    if (!categoriesResponse.ok) throw new Error("Could not read categories for report");
+    const categoryRows = await categoriesResponse.json();
+    const categoryMap = new Map<string, { name: string; icon: string }>();
+    for (const category of Array.isArray(categoryRows) ? categoryRows : []) categoryMap.set(category.id, { name: category.name, icon: category.icon || "📁" });
+    let income = 0;
+    let expenses = 0;
+    let count = 0;
+    const byCategory = new Map<string, number>();
+    for (const row of rows) {
+      const amount = Number(row.amount) || 0;
+      if (row.kind === "income") income += amount;
+      else if (row.kind === "expense") {
+        expenses += amount;
+        if (row.category_id) byCategory.set(row.category_id, (byCategory.get(row.category_id) || 0) + amount);
+      }
+      if (row.kind === "income" || row.kind === "expense") count++;
+    }
+    const result = income - expenses;
+    const savings = income > 0 ? Math.round(result / income * 100) : null;
+    const top = [...byCategory.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const topText = top.length
+      ? top.map(([id, amount]) => {
+          const category = categoryMap.get(id);
+          return `• ${category?.icon || "📁"} <b>${escapeHtml(category?.name || "Categoria")}</b>: ${money(amount)}`;
+        }).join("\n")
+      : "Ainda não há despesas categorizadas neste mês.";
+    answer = `📊 <b>Relatório financeiro · ${escapeHtml(range.label)}</b>\n\n🟢 Receitas: <b>${money(income)}</b>\n🔴 Despesas: <b>${money(expenses)}</b>\n${result >= 0 ? "💚" : "⚠️"} Resultado: <b>${money(result)}</b>\n${savings === null ? "📈 Taxa de economia: sem receitas registradas" : `📈 Taxa de economia: <b>${savings}%</b>`}\n🧾 Lançamentos: ${count}\n\n<b>Maiores categorias de despesa</b>\n${topText}\n\n<i>Relatório calculado a partir dos lançamentos registrados.</i>`;
   } else if (/^\/categorias\b/i.test(text.trim())) {
     const response = await db(`categories?user_id=eq.${encodeURIComponent(userId)}&select=name,kind,icon&order=kind,name`);
     if (!response.ok) throw new Error("Could not read categories");
@@ -378,12 +412,33 @@ async function sendText(chatId: number, userId: string, text: string) {
       body: JSON.stringify({ user_id: userId, kind: entry.kind, amount: entry.amount, currency: "BRL", description: entry.description, category_id: categoryId, source: "telegram" }),
     });
     if (!insert.ok) throw new Error("Could not save financial transaction");
+    let budgetNotice = "";
+    if (entry.kind === "expense") {
+      const range = monthRange();
+      const [budgets, monthRows] = await Promise.all([
+        listBudgets(userId),
+        getTransactions(userId, { from: range.start, to: range.end, limit: 1000 }),
+      ]);
+      const currentSpend = monthRows.filter(row => row.kind === "expense" && row.category_id === categoryId).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+      const previousSpend = Math.max(0, currentSpend - entry.amount);
+      const budget = budgets.find((item: any) => item.category_id === categoryId);
+      if (budget && Number(budget.amount) > 0) {
+        const limit = Number(budget.amount);
+        const beforePercent = previousSpend / limit * 100;
+        const afterPercent = currentSpend / limit * 100;
+        if (beforePercent < 100 && afterPercent >= 100) {
+          budgetNotice = `\n\n🚨 <b>Orçamento excedido!</b> ${escapeHtml(budget.name)}: ${money(currentSpend)} de ${money(limit)}.`;
+        } else if (beforePercent < 80 && afterPercent >= 80) {
+          budgetNotice = `\n\n⚠️ <b>Atenção ao orçamento</b> ${escapeHtml(budget.name)}: você já usou ${Math.round(afterPercent)}% do limite (${money(currentSpend)} de ${money(limit)}).`;
+        }
+      }
+    }
     const label = entry.kind === "income" ? "Receita" : "Despesa";
-    answer = `✅ <b>${label} registrada</b>\nValor: <b>${entry.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\nDescrição: ${escapeHtml(entry.description)}\n\nCategoria automática: ${escapeHtml(category.name)} ${category.icon}.`;
+    answer = `✅ <b>${label} registrada</b>\nValor: <b>${entry.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\nDescrição: ${escapeHtml(entry.description)}\n\nCategoria automática: ${escapeHtml(category.name)} ${category.icon}.${budgetNotice}`;
   } else if (/^\/(start|ajuda|help)\b/i.test(text.trim())) {
-    answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nPosso começar registrando receitas e despesas por texto. Exemplos:\n• Gastei 25,90 no almoço\n• Paguei 120 conta de luz\n• Recebi 200 de um freela\n\nComandos: /saldo, /resumo, /ultimas, /editar, /excluir, /orcamento, /orcamentos e /categorias.";
+    answer = "👋 <b>Olá! Eu sou a Íris.</b>\n\nPosso começar registrando receitas e despesas por texto. Exemplos:\n• Gastei 25,90 no almoço\n• Paguei 120 conta de luz\n• Recebi 200 de um freela\n\nComandos: /saldo, /resumo, /ultimas, /editar, /excluir, /orcamento, /orcamentos, /relatorio e /categorias.";
   } else {
-    answer = "Ainda não consegui identificar um lançamento com segurança.\n\nTente: <b>Gastei 25,90 no almoço</b> ou <b>Recebi 200 de um freela</b>. Comandos: /saldo, /resumo, /ultimas, /orcamento, /orcamentos, /categorias, /editar e /excluir.";
+    answer = "Ainda não consegui identificar um lançamento com segurança.\n\nTente: <b>Gastei 25,90 no almoço</b> ou <b>Recebi 200 de um freela</b>. Comandos: /saldo, /resumo, /ultimas, /orcamento, /orcamentos, /relatorio, /categorias, /editar e /excluir.";
   }
   const savedAssistant = await db("conversation_messages", {
     method: "POST", headers: { Prefer: "return=minimal" },
