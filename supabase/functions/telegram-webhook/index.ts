@@ -48,7 +48,7 @@ function parseEntry(text: string): { kind: "income" | "expense"; amount: number;
 }
 
 function parseEditDetails(raw: string): { amount: number; description: string } | null {
-  const match = raw.match(/(?:R\$\s*)?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|(?:R\$\s*)?\d+(?:[.,]\d{1,2})?/i);
+  const match = raw.match(/(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?/i);
   if (!match) return null;
   const amount = parseMoney(match[0].replace(/^R\$/i, ""));
   if (!amount) return null;
