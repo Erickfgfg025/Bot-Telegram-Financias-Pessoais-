@@ -29,8 +29,9 @@ async function telegram(method: string, payload: Record<string, unknown>) {
   const response = await fetch("https://api.telegram.org/bot" + token + "/" + method, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error("Telegram API returned " + response.status);
-  return await response.json();
+  const data = await response.json();
+  if (!response.ok || data?.ok !== true) throw new Error("Telegram API send failed (HTTP " + response.status + ")");
+  return data;
 }
 
 function money(value: number) {
@@ -80,7 +81,7 @@ Deno.serve(async (req: Request) => {
         const updated = await db("reminders?id=eq." + encodeURIComponent(reminder.id) + "&status=eq.pending", { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "sent" }) });
         if (!updated.ok) throw new Error("Could not mark reminder sent");
         remindersSent++;
-      } catch { remindersFailed++; }
+      } catch (error) { console.error("Reminder delivery failed", reminder.id, error instanceof Error ? error.message : "unknown error"); remindersFailed++; }
     }
     const rulesResponse = await db("recurring_rules?active=eq.true&next_run_at=lte." + today + "&select=id,user_id,description,kind,amount,frequency,next_run_at,category_id&order=next_run_at.asc&limit=50");
     if (!rulesResponse.ok) throw new Error("Could not read due recurring rules");
@@ -109,7 +110,7 @@ Deno.serve(async (req: Request) => {
         const chatId = await getChat(rule.user_id);
         if (chatId) await telegram("sendMessage", { chat_id: chatId, text: "🔁 Lançamento recorrente registrado\n" + (rule.kind === "income" ? "Receita" : "Despesa") + ": " + money(Number(rule.amount)) + "\nDescrição: " + rule.description + "\nData: " + new Date(dueDate + "T12:00:00Z").toLocaleDateString("pt-BR", { timeZone: "UTC" }) });
         recurringCreated++;
-      } catch { recurringFailed++; }
+      } catch (error) { console.error("Recurring processing failed", rule.id, error instanceof Error ? error.message : "unknown error"); recurringFailed++; }
     }
     return json({ ok: true, date: today, reminders_sent: remindersSent, reminders_failed: remindersFailed, recurring_processed: recurringCreated, recurring_failed: recurringFailed });
   } catch {
