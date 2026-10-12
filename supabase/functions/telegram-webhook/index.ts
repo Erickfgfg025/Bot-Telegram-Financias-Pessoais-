@@ -1050,7 +1050,7 @@ function normalizeNaturalCommand(raw: string, preferences: Record<string, unknow
   const pendingDeleteAllActive = Boolean(pendingDeleteAll && deleteAllTime && Date.now() - deleteAllTime <= 10 * 60 * 1000);
   const pendingDeleteActive = Boolean(pendingDelete?.id && deleteTime && Date.now() - deleteTime <= 10 * 60 * 1000);
   const confirmationNormalized = normalized.replace(/[,.!?]+/g, " ").replace(/\s+/g, " ").trim();
-  if ((pendingDeleteActive || pendingDeleteAllActive) && /^(?:sim|sim pode|pode|confirmo|confirmar|confirmo a exclusao|pode excluir|pode apagar|exclua|apague|isso mesmo|confirmado|confirmo apagar tudo|sim apagar tudo|pode apagar tudo|pode excluir tudo)$/i.test(confirmationNormalized)) return "/confirmar";
+  if ((pendingDeleteActive || pendingDeleteAllActive) && /^(?:sim|sim pode|sim pode excluir|sim pode apagar|sim exclua|sim apague|pode|pode excluir|pode apagar|pode limpar|confirmo|confirmar|confirmo a exclusao|confirmo excluir|confirmo apagar|pode excluir tudo|pode apagar tudo|pode excluir todos|pode apagar todos|exclua tudo|apague tudo|limpe tudo|sim apagar tudo|sim excluir tudo|sim apagar tudo que registrei|isso mesmo|confirmado|confirmo apagar tudo|sim apagar tudo|pode apagar tudo|pode excluir tudo)$/i.test(confirmationNormalized)) return "/confirmar";
   if (/^(?:oi|ola|bom dia|boa tarde|boa noite|ajuda|o que voce faz|como voce funciona)$/i.test(normalized)) return "/start";
 
   if (/\b(?:meus lembretes|quais lembretes|listar lembretes|mostrar lembretes|tenho lembretes|ver lembretes)\b/.test(normalized)) return "/lembretes";
