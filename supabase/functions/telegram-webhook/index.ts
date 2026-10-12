@@ -144,7 +144,7 @@ function cleanMemoryFacts(input: unknown, additions: unknown[] = []): string[] {
   const canonical = (raw: string) => {
     const fact = raw.trim().replace(/\s+/g, " ").replace(/[.!?]+$/, "").slice(0, 220);
     const n = normalizeText(fact);
-    const p = fact.match(/(?:meu\s+)?projeto atual(?: do usuario)?\s+(?:se chama|chama-se|e|é)\s+(.+)/i)
+    const p = fact.match(/(?:^|\b)(?:o\s+)?(?:meu\s+)?projeto atual(?: do usuario)?\s+(?:se chama|chama-se|e|é)\s+(.+)/i)
       || fact.match(/nome do meu projeto\s+(?:e|é|se chama)\s+(.+)/i);
     if (p?.[1]) return "Projeto atual: " + p[1].trim().replace(/[.!?]+$/, "");
     if (/\b(?:prefiro|prefere|preferencia)\b/.test(n) && /\brespostas?\s+(?:curtas?|breves?|detalhadas?|longas?|objetivas?|completas?)\b/.test(n)) {
