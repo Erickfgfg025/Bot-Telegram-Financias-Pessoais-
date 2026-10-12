@@ -603,11 +603,17 @@ function naturalBudgetCommand(raw: string, normalized: string): string | null {
 }
 
 function naturalGoalCommand(raw: string, normalized: string): string | null {
-  if (/\b(?:minhas metas|meus objetivos financeiros|listar metas|mostrar metas|ver metas|quais sao minhas metas|como estao minhas metas)\b/.test(normalized)) return "/metas";
-  if (/\b(?:desativar|desligar|parar|nao quero receber)\b.{0,35}\brelatorios? semanais?\b/.test(normalized)) return "/relatorio semanal off";
-  if (/\b(?:ativar|reativar|ligar|quero receber)\b.{0,35}\brelatorios? semanais?\b/.test(normalized)) return "/relatorio semanal on";
-  if (/\b(?:relatorio semanal|resumo semanal|semana financeira|como foram minhas financas na semana)\b/.test(normalized)) return "/relatorio semanal";
-  const contribution = /\b(?:guardei|depositei|adicionei|contribui|coloquei|somei|poupei)\b/.test(normalized) && /\b(?:meta|objetivo)\b/.test(normalized);
+  const reportSubject = /\b(?:relatorios?|resumos?|balancos?|financas|gastos|despesas)\b/.test(normalized);
+  const weeklyCadence = /\b(?:semanal|semana|semanalmente|toda semana|todas as semanas|toda segunda|toda segunda feira|todas as segundas)\b/.test(normalized);
+  const stopReports = /\b(?:desativar|desative|desliga|desligar|parar|cancele|cancelar|nao quero mais|nao receber)\b/.test(normalized);
+  const startReports = /\b(?:ativar|ative|reativar|reative|ligar|quero receber|me envie|me manda|mande|enviar|receber)\b/.test(normalized);
+  if (reportSubject && weeklyCadence && stopReports) return "/relatorio semanal off";
+  if (reportSubject && weeklyCadence && startReports) return "/relatorio semanal on";
+  if (/\b(?:relatorio semanal|resumo semanal|semana financeira|como foram minhas financas na semana|como foi minha semana financeira|fechamento semanal|balanco da semana|resumo da semana passada|relatorio da semana passada|gastos da semana passada|despesas da semana passada|ultimos 7 dias)\b/.test(normalized)) return "/relatorio semanal";
+  if (/\b(?:minhas metas|meus objetivos financeiros|listar metas|mostrar metas|ver metas|quais sao minhas metas|como estao minhas metas|acompanhar minhas metas|progresso das metas)\b/.test(normalized)) return "/metas";
+
+  const contribution = /\b(?:guardei|depositei|adicionei|contribui|coloquei|somei|poupei|juntei|acrescentei)\b/.test(normalized) &&
+    (/\b(?:meta|objetivo)\b/.test(normalized) || /\b(?:meta|objetivo)\s*(?:numero\s*)?(?:#\s*)?\d+\b/i.test(raw));
   if (contribution) {
     const indexMatch = raw.match(/\b(?:meta|objetivo)\s*(?:numero\s*)?(?:#\s*)?(\d+)\b/i);
     const withoutIndex = raw.replace(/\b(?:meta|objetivo)\s*(?:numero\s*)?(?:#\s*)?\d+\b/i, " ");
@@ -615,15 +621,17 @@ function naturalGoalCommand(raw: string, normalized: string): string | null {
     if (indexMatch && amountMatch) return "/guardar " + Number(indexMatch[1]) + " " + amountMatch[0].replace(/^R\$\s*/i, "").trim();
     return "/metas";
   }
-  const createCue = /\b(?:criar|crie|definir|defina|meta|objetivo|juntar|guardar|poupar|economizar|acumular)\b/.test(normalized);
+
+  const createCue = /\b(?:criar|crie|definir|defina|estabelecer|quero uma meta|meta|objetivo|juntar|guardar|poupar|economizar|acumular|juntar dinheiro|reservar dinheiro)\b/.test(normalized);
   if (!createCue || parseEntry(raw) || /^(?:quanto|qual|quais|como|por que|porque)\b/.test(normalized)) return null;
+
   const withoutDate = raw.replace(/\b20\d{2}-\d{2}-\d{2}\b/g, " ");
   const amountMatch = withoutDate.match(/(?<![\d.,])(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?(?![\d.,])/i);
   if (!amountMatch) return "/meta";
   const amount = amountMatch[0].replace(/^R\$\s*/i, "").trim();
   const dateMatch = raw.match(/\b20\d{2}-\d{2}-\d{2}\b/);
   const name = raw.replace(amountMatch[0], " ").replace(/\b20\d{2}-\d{2}-\d{2}\b/g, " ")
-    .replace(/\b(?:por favor|quero|preciso|planejo|planejar|criar|crie|definir|defina|meta|metas|objetivo|objetivos|financeira|financeiro|juntar|guarde|guardar|poupar|economizar|acumular|comprar|adquirir|para|pra|ate|até|de|do|da|dos|das|um|uma|meu|minha|meus|minhas|valor|dinheiro|reais?|real)\b/ig, " ")
+    .replace(/\b(?:por favor|quero|preciso|planejo|planejar|criar|crie|definir|defina|estabelecer|meta|metas|objetivo|objetivos|financeira|financeiro|juntar|guarde|guardar|poupar|economizar|acumular|comprar|adquirir|reservar|dinheiro|para|pra|ate|até|de|do|da|dos|das|um|uma|o|a|os|as|meu|minha|meus|minhas|valor|reais?|real|por mes|mensalmente|mensal|todo mes|toda semana|por semana|quero|pretendo|consigo)\b/ig, " ")
     .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "").slice(0, 100);
   if (!name) return "/meta";
   return "/meta " + amount + " " + name + (dateMatch ? " " + dateMatch[0] : "");
