@@ -145,21 +145,38 @@ async function sendElevenLabsAudio(chatId: number, htmlText: string): Promise<bo
   };
   if (Object.keys(voiceSettings).length) requestBody.voice_settings = voiceSettings;
 
-  let ttsResponse: Response;
-  try {
-    ttsResponse = await fetch(
-      "https://api.elevenlabs.io/v1/text-to-speech/" + encodeURIComponent(voiceId) + "?output_format=mp3_44100_128",
-      {
-        method: "POST",
-        headers: { "xi-api-key": apiKey, "content-type": "application/json" },
-        body: JSON.stringify(requestBody),
-      },
-    );
-  } catch (error) {
-    console.error("ElevenLabs request failed", error instanceof Error ? error.message : "network error");
-    return false;
+  // Tenta primeiro a voz solicitada. Se a ElevenLabs responder 404, tenta a voz
+  // previamente configurada nas Secrets para não deixar a Íris sem áudio.
+  const configuredVoiceId = env("ELEVENLABS_VOICE_ID");
+  const voiceIds = [voiceId, configuredVoiceId].filter(
+    (id, index, all): id is string => Boolean(id) && all.indexOf(id) === index,
+  );
+  let ttsResponse: Response | null = null;
+  for (let index = 0; index < voiceIds.length; index++) {
+    const candidateVoiceId = voiceIds[index];
+    try {
+      const response = await fetch(
+        "https://api.elevenlabs.io/v1/text-to-speech/" + encodeURIComponent(candidateVoiceId) + "?output_format=mp3_44100_128",
+        {
+          method: "POST",
+          headers: { "xi-api-key": apiKey, "content-type": "application/json" },
+          body: JSON.stringify(requestBody),
+        },
+      );
+      if (response.status === 404 && index < voiceIds.length - 1) {
+        console.error("Requested ElevenLabs voice returned 404; trying configured fallback voice");
+        try { await response.body?.cancel(); } catch { /* Ignore response cleanup errors. */ }
+        continue;
+      }
+      ttsResponse = response;
+      break;
+    } catch (error) {
+      console.error("ElevenLabs request failed", error instanceof Error ? error.message : "network error");
+      return false;
+    }
   }
 
+  if (!ttsResponse) return false;
   if (!ttsResponse.ok) {
     console.error("ElevenLabs TTS returned HTTP", ttsResponse.status);
     try { await ttsResponse.body?.cancel(); } catch { /* Ignore response cleanup errors. */ }
