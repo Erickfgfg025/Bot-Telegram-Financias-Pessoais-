@@ -942,6 +942,7 @@ async function sendText(chatId: number, userId: string, text: string) {
   } else if (pendingDocumentForIntent && /^(?:cancelar documento|cancelar comprovante|nao registra|não registra|nao registre|não registre|nao lancar|não lançar|descartar documento|deixa pra la|deixa para la|cancelar|cancela|nao|não)$/.test(normalizedDocumentReply)) {
     text = "/cancelardocumento";
   }
+  const isDocumentResponse = text === "/confirmardocumento" || text === "/cancelardocumento";
   const pendingAtStart = editPreferences.pending_transaction_edit as { id?: string; created_at?: string } | undefined;
   const pendingAtStartTime = pendingAtStart?.created_at ? Date.parse(pendingAtStart.created_at) : 0;
   const editingAtStart = Boolean(pendingAtStart?.id && pendingAtStartTime && Date.now() - pendingAtStartTime <= 10 * 60 * 1000);
@@ -987,7 +988,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     if (facts.length) aiConversationReply = "🧠 Lembro destas informações:\n\n" + facts.map((fact, index) => (index + 1) + ". " + fact).join("\n");
   }
 
-  if (!aiConversationReply && !originalText.trim().startsWith("/") && !editingAtStart) {
+  if (!aiConversationReply && !isDocumentResponse && !originalText.trim().startsWith("/") && !editingAtStart) {
     const aiDecision = await askGeminiIntent(userId, editPreferences);
     if (aiDecision?.kind === "reply") aiConversationReply = aiDecision.value;
     else if (aiDecision?.kind === "command") text = aiDecision.value;
