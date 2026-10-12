@@ -1301,7 +1301,10 @@ async function sendText(chatId: number, userId: string, text: string) {
         : voiceControl === "enable"
           ? "Pronto, a voz da Íris está ativada. Vou responder com texto e áudio."
           : "A voz da Íris está " + (editPreferences.voice_reply_enabled === false ? "desativada." : "ativada.");
-      await sendElevenLabsAudio(chatId, sampleText);
+      const sentVoiceSample = await sendElevenLabsAudio(chatId, sampleText);
+      if (!sentVoiceSample && voiceControl === "test") {
+        await reply(chatId, "Não consegui gerar ou enviar o áudio. Confira se a Secret ELEVENLABS_API_KEY é válida, se ELEVENLABS_VOICE_ID corresponde a uma voz disponível e se sua conta tem quota para gerar fala.");
+      }
     }
     return;
   }
