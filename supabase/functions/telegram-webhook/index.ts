@@ -623,7 +623,7 @@ function isAllowedGeminiCommand(value: string): boolean {
     || /^\/(?:memoria|esquecermemoria)\s*$/i.test(v);
 }
 
-async function askGeminiIntent(userId: string, preferences: Record<string, unknown>): Promise<GeminiDecision | null> {
+async function askGeminiIntent(userId: string, preferences: Record<string, unknown>, currentMessage: string): Promise<GeminiDecision | null> {
   if (!env("GEMINI_API_KEY")) return null;
   const system = [
     "Você é a Íris, uma assistente pessoal brasileira com jeito leve, informal e espontâneo. Fale como alguém gente boa conversando no Telegram: use português brasileiro do dia a dia, frases claras, contrações naturais e emojis com moderação. Evite tom robótico e formalidade excessiva, sem exagerar nas gírias.",
@@ -632,7 +632,7 @@ async function askGeminiIntent(userId: string, preferences: Record<string, unkno
     "VALORES E AÇÕES: quando o valor estiver escrito claramente, preserve exatamente o valor. Interprete expressões de valor muito comuns apenas quando forem inequívocas no contexto (por exemplo, dois conto pode significar R$ 2.000, enquanto vinte conto normalmente significa R$ 20). Se uma gíria puder mudar o valor de forma relevante, faça uma pergunta curta em vez de chutar. Não crie uma transação para hipóteses, planos futuros, piadas, negações ou exemplos. Só registre algo como ocorrido quando a mensagem atual indicar claramente que aconteceu.",
     "Você está integrada a um bot financeiro, mas NÃO tem autorização para inventar saldo, transações, lembretes, orçamentos ou qualquer dado pessoal.",
     "MEMÓRIA DE LONGO PRAZO: use os fatos persistentes abaixo e o histórico recente para lembrar preferências, projetos, objetivos e informações que o usuário contou. Nunca invente lembranças. Se não encontrar a resposta, diga que não consegue confirmar. Ao fim de cada resposta, preencha memory_updates com até 3 fatos duradouros novos que o usuário tenha afirmado explicitamente ou pedido para guardar. Não salve senhas, tokens, chaves, dados bancários completos, informações altamente sensíveis, nem valores de transações financeiras, que já ficam no banco financeiro. Não transforme suposições em fatos. Se não houver nada útil, retorne array vazio.",
-    "MEMÓRIA RELEVANTE PARA A MENSAGEM ATUAL: " + JSON.stringify(selectRelevantMemoryFacts(preferences.memory_facts, (contents[contents.length - 1]?.parts?.[0]?.text as string) || "", 12)),
+    "MEMÓRIA RELEVANTE PARA A MENSAGEM ATUAL: " + JSON.stringify(selectRelevantMemoryFacts(preferences.memory_facts, currentMessage, 12)),
     "Para perguntas sobre dados reais do usuário, use apenas comandos permitidos que façam a aplicação consultar o banco. Se não houver comando adequado, explique a limitação e pergunte o que a pessoa quer fazer.",
     "Responda sempre como JSON válido com cinco propriedades: kind, value, reply, transactions e memory_updates. kind deve ser command, reply, mixed ou batch. Para command, reply ou mixed, preencha transactions com array vazio. Para batch, deixe value vazio. memory_updates é uma lista de fatos duradouros novos, curta e sem duplicatas.",
     "Use kind=command quando o pedido for uma operação existente; value deve ser o comando permitido ou uma frase de lançamento financeiro inequívoca.",
@@ -989,7 +989,7 @@ async function sendText(chatId: number, userId: string, text: string) {
   }
 
   if (!aiConversationReply && !isDocumentResponse && !originalText.trim().startsWith("/") && !editingAtStart) {
-    const aiDecision = await askGeminiIntent(userId, editPreferences);
+    const aiDecision = await askGeminiIntent(userId, editPreferences, originalText);
     if (aiDecision?.kind === "reply") aiConversationReply = aiDecision.value;
     else if (aiDecision?.kind === "command") text = aiDecision.value;
     else if (aiDecision?.kind === "mixed") {
