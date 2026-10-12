@@ -235,7 +235,9 @@ function selectRelevantMemoryFacts(input: unknown, query: string, limit = 10): s
 function parseNaturalFinancialDelete(raw: string): NaturalDeleteIntent | null {
   const normalized = normalizeText(raw).replace(/[!?.,]+$/g, "").replace(/\s+/g, " ").trim();
   if (!normalized || /^(?:nao|nunca|jamais)\b/.test(normalized)) return null;
-  if (/\b(?:como faco|como posso|como eu|me explica|me ensina|quero saber|gostaria de saber|e possivel|posso)\b/.test(normalized)) return null;
+  if (/\b(?:nao quero|nao precisa|nao apague|nao exclua|nao delete|nao remova|nao quero apagar|nao quero excluir|nao quero deletar)\b/.test(normalized)) return null;
+  if (/\b(?:como faco|como posso|como eu|como apagar|como excluir|como deletar|como remover|me explica|me ensina|quero saber|gostaria de saber|e possivel|posso|devo apagar|devo excluir|qual comando)\b/.test(normalized)) return null;
+  if (/\b(?:lembrete|lembretes|memoria|memorias|conversa|historico do chat)\b/.test(normalized)) return null;
   if (/^(?:confirmo|confirmar|confirmado|sim|pode|autorizo)\b/.test(normalized)) return null;
   const action = normalized.match(/\b(apagar|apague|apaga|excluir|exclua|exclui|remover|remova|remove|deletar|delete|limpar|limpe)\b/);
   if (!action || /\b(?:nao apague|nao exclua|nao delete|nao remova)\b/.test(normalized)) return null;
@@ -247,7 +249,7 @@ function parseNaturalFinancialDelete(raw: string): NaturalDeleteIntent | null {
   const saysAll = /\b(todos|todas|tudo|inteiro|inteira|historico completo|tudo que (?:eu )?registrei|todos os registros|todas as movimentacoes)\b/.test(normalized)
     && /\b(registro|registros|lancamento|lancamentos|transacao|transacoes|movimentacao|movimentacoes|financeiro|financeiros|financas|despesa|despesas|gasto|gastos|receita|receitas|entrada|entradas|renda|rendas)\b/.test(normalized);
   const categoryBulk = /\b(?:as|todas as|todos os|minhas|meus|todas minhas|todos meus)\s+(?:despesas|gastos|saidas|receitas|entradas|rendas)\b/.test(normalized)
-    || /\b(?:apagar|apague|apaga|excluir|exclua|exclui|remover|remova|remove|deletar|delete|limpar|limpe)\s+(?:as|minhas|meus)\s+(?:despesas|gastos|saidas|receitas|entradas|rendas)\b/.test(normalized);
+    || /\b(?:apagar|apague|apaga|excluir|exclua|exclui|remover|remova|remove|deletar|delete|limpar|limpe)\s+(?:(?:todas?\s+)?(?:as\s+)?(?:minhas\s+)?)?(?:despesas|gastos|saidas|receitas|entradas|rendas)\b/.test(normalized);
   const financialHistory = /\b(?:todos os meus registros financeiros|todas as minhas movimentacoes financeiras|historico financeiro|todos os lancamentos financeiros|todas as receitas e despesas|receitas e despesas|tudo que registrei|tudo que lancei|todas as minhas financas|todos os registros|apagar tudo|apague tudo|apaga tudo|excluir tudo|exclua tudo|exclui tudo|remover tudo|remova tudo|limpar tudo|limpe tudo)\b/.test(normalized);
   if ((saysAll || categoryBulk || financialHistory) && scope === "any") scope = "all";
   if (saysAll || categoryBulk || financialHistory) return { mode: "all", scope: scope === "any" ? "all" : scope };
@@ -1048,7 +1050,8 @@ function normalizeNaturalCommand(raw: string, preferences: Record<string, unknow
   const deleteAllTime = pendingDeleteAll?.created_at ? Date.parse(pendingDeleteAll.created_at) : 0;
   const pendingDeleteAllActive = Boolean(pendingDeleteAll && deleteAllTime && Date.now() - deleteAllTime <= 10 * 60 * 1000);
   const pendingDeleteActive = Boolean(pendingDelete?.id && deleteTime && Date.now() - deleteTime <= 10 * 60 * 1000);
-  if ((pendingDeleteActive || pendingDeleteAllActive) && /^(?:sim|sim pode|pode|confirmo|confirmar|confirmo a exclusao|pode excluir|pode apagar|exclua|apague|isso mesmo|confirmado|confirmo apagar tudo|sim apagar tudo|pode apagar tudo|pode excluir tudo)$/i.test(normalized)) return "/confirmar";
+  const confirmationNormalized = normalized.replace(/[,.!?]+/g, " ").replace(/\s+/g, " ").trim();
+  if ((pendingDeleteActive || pendingDeleteAllActive) && /^(?:sim|sim pode|pode|confirmo|confirmar|confirmo a exclusao|pode excluir|pode apagar|exclua|apague|isso mesmo|confirmado|confirmo apagar tudo|sim apagar tudo|pode apagar tudo|pode excluir tudo)$/i.test(confirmationNormalized)) return "/confirmar";
   if (/^(?:oi|ola|bom dia|boa tarde|boa noite|ajuda|o que voce faz|como voce funciona)$/i.test(normalized)) return "/start";
 
   if (/\b(?:meus lembretes|quais lembretes|listar lembretes|mostrar lembretes|tenho lembretes|ver lembretes)\b/.test(normalized)) return "/lembretes";
@@ -1108,8 +1111,9 @@ async function sendText(chatId: number, userId: string, text: string) {
   }
   const pendingBulkAtStart = editPreferences.pending_transaction_delete_all as { created_at?: string } | undefined;
   const pendingBulkTimeAtStart = pendingBulkAtStart?.created_at ? Date.parse(pendingBulkAtStart.created_at) : 0;
+  const confirmationTextAtStart = normalizeText(originalText).replace(/[,.!?]+/g, " ").replace(/\s+/g, " ").trim();
   const bulkConfirmationAtStart = Boolean(pendingBulkAtStart && pendingBulkTimeAtStart && Date.now() - pendingBulkTimeAtStart <= 10 * 60 * 1000 &&
-    /^(?:sim|sim pode|pode|confirmo|confirmar|confirmo apagar tudo|sim apagar tudo|pode apagar tudo|pode excluir tudo|isso mesmo|confirmado|confirmo a exclusao|confirmo excluir tudo)$/i.test(normalizeText(originalText)));
+    /^(?:sim|sim pode|pode|confirmo|confirmar|confirmo apagar tudo|sim apagar tudo|pode apagar tudo|pode excluir tudo|isso mesmo|confirmado|confirmo a exclusao|confirmo excluir tudo)$/i.test(confirmationTextAtStart));
   const naturalDeletion = !originalText.trim().startsWith("/") && !bulkConfirmationAtStart
     ? parseNaturalFinancialDelete(originalText)
     : null;
