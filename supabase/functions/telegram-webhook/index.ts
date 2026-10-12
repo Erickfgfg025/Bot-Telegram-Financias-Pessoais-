@@ -127,14 +127,17 @@ async function sendElevenLabsAudio(chatId: number, htmlText: string): Promise<bo
   const speechText = prepareNaturalSpeech(htmlText);
   if (!speechText || speechText.length > 1800) return false;
 
-  // Deixe os ajustes salvos na própria voz do ElevenLabs prevalecerem.
-  // Só envie voice_settings quando o usuário definir overrides nas Secrets do Supabase.
-  const voiceSettings: Record<string, unknown> = {};
-  if (env("ELEVENLABS_STABILITY")) voiceSettings.stability = envNumber("ELEVENLABS_STABILITY", 0.45, 0, 1);
-  if (env("ELEVENLABS_SIMILARITY_BOOST")) voiceSettings.similarity_boost = envNumber("ELEVENLABS_SIMILARITY_BOOST", 0.75, 0, 1);
-  if (env("ELEVENLABS_STYLE")) voiceSettings.style = envNumber("ELEVENLABS_STYLE", 0.15, 0, 1);
-  if (env("ELEVENLABS_SPEED")) voiceSettings.speed = envNumber("ELEVENLABS_SPEED", 1, 0.25, 4);
-  if (env("ELEVENLABS_SPEAKER_BOOST")) voiceSettings.use_speaker_boost = env("ELEVENLABS_SPEAKER_BOOST").toLowerCase() !== "false";
+  // Preset padrão da Íris: conversa natural, descontraída e expressiva em pt-BR.
+  // Secrets do Supabase permitem ajustar cada parâmetro sem nova alteração de código.
+  const voiceSettings: Record<string, unknown> = {
+    stability: envNumber("ELEVENLABS_STABILITY", 0.36, 0, 1),
+    similarity_boost: envNumber("ELEVENLABS_SIMILARITY_BOOST", 0.75, 0, 1),
+    style: envNumber("ELEVENLABS_STYLE", 0.32, 0, 1),
+    speed: envNumber("ELEVENLABS_SPEED", 1.04, 0.25, 4),
+    use_speaker_boost: env("ELEVENLABS_SPEAKER_BOOST")
+      ? env("ELEVENLABS_SPEAKER_BOOST").toLowerCase() !== "false"
+      : true,
+  };
 
   const requestBody: Record<string, unknown> = {
     text: speechText,
