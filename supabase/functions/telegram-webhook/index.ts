@@ -69,13 +69,20 @@ async function sendElevenLabsAudio(chatId: number, htmlText: string): Promise<bo
   const speechText = plainSpeechText(htmlText);
   if (!speechText || speechText.length > 1800) return false;
 
-  const voiceSettings: Record<string, unknown> = {
-    stability: envNumber("ELEVENLABS_STABILITY", 0.45, 0, 1),
-    similarity_boost: envNumber("ELEVENLABS_SIMILARITY_BOOST", 0.75, 0, 1),
-    style: envNumber("ELEVENLABS_STYLE", 0.15, 0, 1),
-    speed: envNumber("ELEVENLABS_SPEED", 1, 0.25, 4),
-    use_speaker_boost: env("ELEVENLABS_SPEAKER_BOOST").toLowerCase() !== "false",
+  // Deixe os ajustes salvos na própria voz do ElevenLabs prevalecerem.
+  // Só envie voice_settings quando o usuário definir overrides nas Secrets do Supabase.
+  const voiceSettings: Record<string, unknown> = {};
+  if (env("ELEVENLABS_STABILITY")) voiceSettings.stability = envNumber("ELEVENLABS_STABILITY", 0.45, 0, 1);
+  if (env("ELEVENLABS_SIMILARITY_BOOST")) voiceSettings.similarity_boost = envNumber("ELEVENLABS_SIMILARITY_BOOST", 0.75, 0, 1);
+  if (env("ELEVENLABS_STYLE")) voiceSettings.style = envNumber("ELEVENLABS_STYLE", 0.15, 0, 1);
+  if (env("ELEVENLABS_SPEED")) voiceSettings.speed = envNumber("ELEVENLABS_SPEED", 1, 0.25, 4);
+  if (env("ELEVENLABS_SPEAKER_BOOST")) voiceSettings.use_speaker_boost = env("ELEVENLABS_SPEAKER_BOOST").toLowerCase() !== "false";
+
+  const requestBody: Record<string, unknown> = {
+    text: speechText,
+    model_id: env("ELEVENLABS_MODEL_ID") || "eleven_multilingual_v2",
   };
+  if (Object.keys(voiceSettings).length) requestBody.voice_settings = voiceSettings;
 
   let ttsResponse: Response;
   try {
@@ -84,11 +91,7 @@ async function sendElevenLabsAudio(chatId: number, htmlText: string): Promise<bo
       {
         method: "POST",
         headers: { "xi-api-key": apiKey, "content-type": "application/json" },
-        body: JSON.stringify({
-          text: speechText,
-          model_id: env("ELEVENLABS_MODEL_ID") || "eleven_multilingual_v2",
-          voice_settings: voiceSettings,
-        }),
+        body: JSON.stringify(requestBody),
       },
     );
   } catch (error) {
