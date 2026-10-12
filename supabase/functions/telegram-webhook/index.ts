@@ -81,6 +81,49 @@ async function getTransactions(userId: string, options: { from?: string; to?: st
   return await response.json();
 }
 
+type NaturalDeleteScope = "all" | "expense" | "income" | "any";
+type NaturalDeleteIntent = { mode: "all" | "latest" | "query" | "ambiguous"; scope: NaturalDeleteScope; query?: string };
+
+async function getAllTransactions(userId: string, scope: NaturalDeleteScope = "any"): Promise<TransactionRow[]> {
+  const result: TransactionRow[] = [];
+  const seen = new Set<string>();
+  const pageSize = 1000;
+  for (let offset = 0; offset < 100000; offset += pageSize) {
+    const params = new URLSearchParams({
+      select: "id,kind,amount,description,occurred_at,category_id",
+      user_id: `eq.${userId}`,
+      order: "occurred_at.desc,id.desc",
+      limit: String(pageSize),
+    });
+    if (scope === "expense" || scope === "income") params.set("kind", `eq.${scope}`);
+    const response = await db(`transactions?${params.toString()}`, {
+      headers: { Range: `${offset}-${offset + pageSize - 1}`, "Range-Unit": "items" },
+    });
+    if (!response.ok) throw new Error("Could not read all financial transactions");
+    const page: TransactionRow[] = await response.json();
+    for (const row of Array.isArray(page) ? page : []) {
+      if (row?.id && !seen.has(row.id)) { seen.add(row.id); result.push(row); }
+    }
+    if (!Array.isArray(page) || page.length < pageSize) return result;
+    if (offset >= 99000) throw new Error("Transaction history exceeds safe scan limit");
+  }
+  return result;
+}
+
+async function countTransactions(userId: string, scope: "all" | "expense" | "income" = "all"): Promise<number> {
+  const params = new URLSearchParams({ select: "id", user_id: `eq.${userId}` });
+  if (scope === "expense" || scope === "income") params.set("kind", `eq.${scope}`);
+  const response = await db(`transactions?${params.toString()}`, {
+    method: "HEAD",
+    headers: { Prefer: "count=exact" },
+  });
+  if (!response.ok) throw new Error("Could not count financial transactions");
+  const contentRange = response.headers.get("content-range") || "";
+  const match = contentRange.match(/\/(\d+)$/);
+  if (!match) throw new Error("The database did not return an exact transaction count");
+  return Number(match[1]);
+}
+
 async function readPreferences(userId: string): Promise<Record<string, unknown>> {
   const response = await db(`user_preferences?user_id=eq.${userId}&select=preferences&limit=1`);
   if (!response.ok) throw new Error("Could not read user preferences");
@@ -187,6 +230,43 @@ function selectRelevantMemoryFacts(input: unknown, query: string, limit = 10): s
   });
   const matches = scored.filter(item => item.score > 0).sort((a, b) => b.score - a.score || b.index - a.index).slice(0, limit);
   return matches.length ? matches.map(item => item.fact) : facts.slice(-Math.min(5, limit));
+}
+
+function parseNaturalFinancialDelete(raw: string): NaturalDeleteIntent | null {
+  const normalized = normalizeText(raw).replace(/[!?.,]+$/g, "").replace(/\s+/g, " ").trim();
+  if (!normalized || /^(?:nao|nunca|jamais)\b/.test(normalized)) return null;
+  if (/\b(?:como faco|como posso|como eu|me explica|me ensina|quero saber|gostaria de saber|e possivel|posso)\b/.test(normalized)) return null;
+  if (/^(?:confirmo|confirmar|confirmado|sim|pode|autorizo)\b/.test(normalized)) return null;
+  const action = normalized.match(/\b(apagar|apague|apaga|excluir|exclua|exclui|remover|remova|remove|deletar|delete|limpar|limpe)\b/);
+  if (!action || /\b(?:nao apague|nao exclua|nao delete|nao remova)\b/.test(normalized)) return null;
+
+  const mentionsExpense = /\b(despesa|despesas|gasto|gastos|saida|saidas)\b/.test(normalized);
+  const mentionsIncome = /\b(receita|receitas|renda|rendas|entrada|entradas|recebimento|recebimentos)\b/.test(normalized);
+  let scope: NaturalDeleteScope = mentionsExpense && !mentionsIncome ? "expense" : mentionsIncome && !mentionsExpense ? "income" : "any";
+
+  const saysAll = /\b(todos|todas|tudo|inteiro|inteira|historico completo|tudo que (?:eu )?registrei|todos os registros|todas as movimentacoes)\b/.test(normalized)
+    && /\b(registro|registros|lancamento|lancamentos|transacao|transacoes|movimentacao|movimentacoes|financeiro|financeiros|financas|despesa|despesas|gasto|gastos|receita|receitas|entrada|entradas|renda|rendas)\b/.test(normalized);
+  const categoryBulk = /\b(?:as|todas as|todos os|minhas|meus|todas minhas|todos meus)\s+(?:despesas|gastos|saidas|receitas|entradas|rendas)\b/.test(normalized)
+    || /\b(?:apagar|apague|apaga|excluir|exclua|exclui|remover|remova|remove|deletar|delete|limpar|limpe)\s+(?:as|minhas|meus)\s+(?:despesas|gastos|saidas|receitas|entradas|rendas)\b/.test(normalized);
+  const financialHistory = /\b(?:todos os meus registros financeiros|todas as minhas movimentacoes financeiras|historico financeiro|todos os lancamentos financeiros|todas as receitas e despesas|receitas e despesas|tudo que registrei|tudo que lancei|todas as minhas financas|todos os registros|apagar tudo|apague tudo|apaga tudo|excluir tudo|exclua tudo|exclui tudo|remover tudo|remova tudo|limpar tudo|limpe tudo)\b/.test(normalized);
+  if ((saysAll || categoryBulk || financialHistory) && scope === "any") scope = "all";
+  if (saysAll || categoryBulk || financialHistory) return { mode: "all", scope: scope === "any" ? "all" : scope };
+
+  let query = normalized.slice((action.index || 0) + action[0].length).trim();
+  query = query
+    .replace(/^(?:(?:por favor|ai|agora|pra mim|para mim|o|a|os|as|meu|minha|meus|minhas|esse|essa|isso|aquele|aquela|ultimo|ultima|recente|do|da|dos|das|de|no|na|nos|nas|registro|registros|lancamento|lancamentos|transacao|transacoes|movimentacao|financeiro|financeira|despesa|despesas|gasto|gastos|receita|receitas|saida|saidas|entrada|entradas)\s+)+/g, "")
+    .replace(/^(?:de|do|da|dos|das|com|sobre|no|na|nos|nas)\s+/g, "")
+    .replace(/\b(?:por favor|por gentileza|agora|pra mim|para mim|por completo)\b/g, "")
+    .replace(/\s+/g, " ").trim();
+  const generic = /^(?:algo|alguma coisa|qualquer coisa|tudo|todas|todos|as despesas|os gastos|as receitas|os registros financeiros|isso|esse|essa|ele|ela)?$/;
+  if (!query || generic.test(query)) {
+    const refersToLatest = /\b(?:ultimo|ultima|mais recente|recente|essa despesa|esse gasto|essa receita|essa entrada|esse lancamento|essa transacao|ultima despesa|ultimo gasto|ultima receita|ultimo lancamento|ultima transacao)\b/.test(normalized);
+    if (refersToLatest && (mentionsExpense || mentionsIncome || /\b(lancamento|transacao|movimentacao|gasto|despesa|receita|entrada|saida)\b/.test(normalized))) {
+      return { mode: "latest", scope };
+    }
+    return { mode: "ambiguous", scope };
+  }
+  return { mode: "query", scope, query };
 }
 
 function categoryGuess(description: string, kind: "income" | "expense"): { name: string; icon: string } {
@@ -964,8 +1044,11 @@ function normalizeNaturalCommand(raw: string, preferences: Record<string, unknow
   if (/^(?:cancelar|cancela|cancela isso|deixa pra la|deixa quieto|desisti|esquece|nao quero mais|cancela a operacao)$/i.test(normalized)) return "/cancelar";
   const pendingDelete = preferences.pending_transaction_delete as { id?: string; created_at?: string } | undefined;
   const deleteTime = pendingDelete?.created_at ? Date.parse(pendingDelete.created_at) : 0;
+  const pendingDeleteAll = preferences.pending_transaction_delete_all as { created_at?: string } | undefined;
+  const deleteAllTime = pendingDeleteAll?.created_at ? Date.parse(pendingDeleteAll.created_at) : 0;
+  const pendingDeleteAllActive = Boolean(pendingDeleteAll && deleteAllTime && Date.now() - deleteAllTime <= 10 * 60 * 1000);
   const pendingDeleteActive = Boolean(pendingDelete?.id && deleteTime && Date.now() - deleteTime <= 10 * 60 * 1000);
-  if (pendingDeleteActive && /^(?:sim|sim pode|pode|confirmo|confirmar|confirmo a exclusao|pode excluir|pode apagar|exclua|apague|isso mesmo|confirmado)$/i.test(normalized)) return "/confirmar";
+  if ((pendingDeleteActive || pendingDeleteAllActive) && /^(?:sim|sim pode|pode|confirmo|confirmar|confirmo a exclusao|pode excluir|pode apagar|exclua|apague|isso mesmo|confirmado|confirmo apagar tudo|sim apagar tudo|pode apagar tudo|pode excluir tudo)$/i.test(normalized)) return "/confirmar";
   if (/^(?:oi|ola|bom dia|boa tarde|boa noite|ajuda|o que voce faz|como voce funciona)$/i.test(normalized)) return "/start";
 
   if (/\b(?:meus lembretes|quais lembretes|listar lembretes|mostrar lembretes|tenho lembretes|ver lembretes)\b/.test(normalized)) return "/lembretes";
@@ -986,12 +1069,6 @@ function normalizeNaturalCommand(raw: string, preferences: Record<string, unknow
     const ord = normalized.match(/\b(primeiro|primeira|segundo|segunda|terceiro|terceira|ultimo|ultima)\b/);
     const map: Record<string, number> = { primeiro: 1, primeira: 1, segundo: 2, segunda: 2, terceiro: 3, terceira: 3, ultimo: 1, ultima: 1 };
     return ("/editar " + (m?.[1] ? String(Number(m[1])) : ord?.[1] ? String(map[ord[1]]) : "")).trim();
-  }
-  if (/\b(?:excluir|exclua|apagar|apague|remover|remova|deletar|delete)\b/.test(normalized) && !/\b(?:lembrete|lembretes|memoria|memorias|conversa|historico do chat)\b/.test(normalized)) {
-    const m = normalized.match(/\b(?:lancamento|transacao|gasto|despesa|receita)\s*(?:numero\s*)?(\d+)\b/);
-    const ord = normalized.match(/\b(primeiro|primeira|segundo|segunda|terceiro|terceira|ultimo|ultima)\b/);
-    const map: Record<string, number> = { primeiro: 1, primeira: 1, segundo: 2, segunda: 2, terceiro: 3, terceira: 3, ultimo: 1, ultima: 1 };
-    return ("/excluir " + (m?.[1] ? String(Number(m[1])) : ord?.[1] ? String(map[ord[1]]) : "")).trim();
   }
   if (/\b(?:pausar|pause|pausa|desativar|desative)\b.*\b(?:recorrencia|lancamento recorrente|conta fixa)\b/.test(normalized)) {
     const m = normalized.match(/\b(?:recorrencia|lancamento|conta)\s*(?:numero\s*)?(\d+)\b/);
@@ -1029,7 +1106,14 @@ async function sendText(chatId: number, userId: string, text: string) {
       await writePreferences(userId, editPreferences);
     }
   }
-  text = normalizeNaturalCommand(originalText, editPreferences);
+  const pendingBulkAtStart = editPreferences.pending_transaction_delete_all as { created_at?: string } | undefined;
+  const pendingBulkTimeAtStart = pendingBulkAtStart?.created_at ? Date.parse(pendingBulkAtStart.created_at) : 0;
+  const bulkConfirmationAtStart = Boolean(pendingBulkAtStart && pendingBulkTimeAtStart && Date.now() - pendingBulkTimeAtStart <= 10 * 60 * 1000 &&
+    /^(?:sim|sim pode|pode|confirmo|confirmar|confirmo apagar tudo|sim apagar tudo|pode apagar tudo|pode excluir tudo|isso mesmo|confirmado|confirmo a exclusao|confirmo excluir tudo)$/i.test(normalizeText(originalText)));
+  const naturalDeletion = !originalText.trim().startsWith("/") && !bulkConfirmationAtStart
+    ? parseNaturalFinancialDelete(originalText)
+    : null;
+  text = naturalDeletion ? (naturalDeletion.mode === "all" ? "/excluirtodos" : "/excluirnatural") : normalizeNaturalCommand(originalText, editPreferences);
   const pendingDocumentForIntent = editPreferences.pending_document_analysis as { created_at?: string } | undefined;
   const normalizedDocumentReply = normalizeText(originalText);
   if (pendingDocumentForIntent && /^(?:confirmar documento|confirmar comprovante|registrar documento|registrar comprovante|pode registrar|pode lancar|pode lançar|sim registra|sim, registra|confirmo|confirmado|confirma|confirmar|registrar|registra|sim|isso mesmo)$/.test(normalizedDocumentReply)) {
@@ -1105,7 +1189,77 @@ async function sendText(chatId: number, userId: string, text: string) {
   const pendingEditCreatedAt = pendingEdit?.created_at ? Date.parse(pendingEdit.created_at) : 0;
   const pendingEditValid = Boolean(pendingEdit?.id && pendingEditCreatedAt && Date.now() - pendingEditCreatedAt <= 10 * 60 * 1000);
   let answer: string;
-  if (aiBatchTransactions?.length) {
+  if (naturalDeletion) {
+    if (naturalDeletion.mode === "all") {
+      const scope = naturalDeletion.scope === "expense" || naturalDeletion.scope === "income" ? naturalDeletion.scope : "all";
+      const count = await countTransactions(userId, scope);
+      delete editPreferences.pending_transaction_delete;
+      delete editPreferences.pending_transaction_edit;
+      if (!count) {
+        delete editPreferences.pending_transaction_delete_all;
+        await writePreferences(userId, editPreferences);
+        answer = scope === "expense" ? "📭 Não encontrei despesas registradas para excluir."
+          : scope === "income" ? "📭 Não encontrei receitas registradas para excluir."
+          : "📭 Não há registros financeiros para excluir.";
+      } else {
+        editPreferences.pending_transaction_delete_all = { scope, count, created_at: new Date().toISOString() };
+        await writePreferences(userId, editPreferences);
+        const description = scope === "expense" ? "despesas" : scope === "income" ? "receitas" : "registros financeiros, incluindo despesas e receitas";
+        answer = `⚠️ <b>Confirmação rápida</b>\nEncontrei ${count} ${description}.\n\nSe você confirmar, vou excluir esses registros financeiros definitivamente. Responda <b>“sim, apagar tudo”</b> para confirmar ou <b>“cancelar”</b> para manter os registros.`;
+      }
+    } else {
+      const scope = naturalDeletion.scope;
+      const rows = await getAllTransactions(userId, scope);
+      let candidates: TransactionRow[] = [];
+      if (naturalDeletion.mode === "latest") {
+        if (rows.length) candidates = [rows[0]];
+      } else if (naturalDeletion.mode === "query" && naturalDeletion.query) {
+        const query = normalizeText(naturalDeletion.query);
+        const stop = new Set(["de", "do", "da", "dos", "das", "no", "na", "nos", "nas", "com", "para", "pra", "por", "em", "um", "uma", "o", "a", "os", "as", "meu", "minha", "meus", "minhas", "reais", "real"]);
+        const tokens = query.split(/[^a-z0-9]+/).filter((token: string) => token.length >= 2 && !stop.has(token));
+        const amountMatch = query.match(/(?:r\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?/i);
+        const targetAmount = amountMatch ? parseMoney(amountMatch[0].replace(/^r\$\s*/i, "")) : null;
+        const descriptionTokens = tokens.filter((token: string) => !/^\d+$/.test(token));
+        candidates = rows.filter((row) => {
+          const description = normalizeText(String(row.description || ""));
+          const descMatches = descriptionTokens.every((token: string) => description.includes(token));
+          const amountMatches = targetAmount === null || Math.abs(Number(row.amount) - targetAmount) < 0.005;
+          if (descriptionTokens.length) return descMatches && amountMatches;
+          return targetAmount !== null && amountMatches;
+        });
+      }
+      delete editPreferences.pending_transaction_delete;
+      delete editPreferences.pending_transaction_delete_all;
+      delete editPreferences.pending_transaction_edit;
+      if (naturalDeletion.mode === "ambiguous") {
+        await writePreferences(userId, editPreferences);
+        answer = "Qual lançamento você quer excluir? Diga a descrição, o valor ou algo como “apaga a última despesa”. Não precisa usar comandos nem escolher números.";
+      } else if (!candidates.length) {
+        await writePreferences(userId, editPreferences);
+        answer = "Não encontrei um lançamento que corresponda a isso. Tente mencionar a descrição ou o valor do gasto/receita.";
+      } else if (candidates.length > 1) {
+        const options = candidates.slice(0, 8).map((row) => {
+          const date = new Date(row.occurred_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" });
+          return `• ${date} · ${row.kind === "income" ? "Receita" : "Despesa"} · <b>${money(Number(row.amount) || 0)}</b> · ${escapeHtml(row.description || "Sem descrição")}`;
+        }).join("\n");
+        await writePreferences(userId, editPreferences);
+        answer = `Encontrei mais de um lançamento parecido, então não apaguei nada.\n\n${options}\n\nDiga qual descrição ou valor devo remover.`;
+      } else {
+        const chosen = candidates[0];
+        const removed = await db(`transactions?id=eq.${encodeURIComponent(chosen.id)}&user_id=eq.${encodeURIComponent(userId)}`, {
+          method: "DELETE", headers: { Prefer: "return=representation" },
+        });
+        if (!removed.ok) throw new Error("Could not delete requested financial transaction");
+        const deletedRows = await removed.json();
+        await writePreferences(userId, editPreferences);
+        if (Array.isArray(deletedRows) && deletedRows.length) {
+          answer = `🗑️ <b>Lançamento excluído.</b>\n${chosen.kind === "income" ? "Receita" : "Despesa"}: <b>${money(Number(chosen.amount) || 0)}</b>\nDescrição: ${escapeHtml(chosen.description || "Sem descrição")}\nData: ${new Date(chosen.occurred_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" })}\n\nOs totais serão recalculados nas próximas consultas.`;
+        } else {
+          answer = "Não encontrei esse lançamento no banco quando tentei removê-lo. Nenhum outro registro foi alterado.";
+        }
+      }
+    }
+  } else if (aiBatchTransactions?.length) {
     const registered: Array<{ kind: "income" | "expense"; amount: number; description: string; category: { name: string; icon: string } }> = [];
     for (const item of aiBatchTransactions) {
       const category = categoryGuess(item.description, item.kind);
@@ -1181,6 +1335,7 @@ async function sendText(chatId: number, userId: string, text: string) {
   } else if (/^\/cancelar\b/i.test(text.trim())) {
     const preferences = await readPreferences(userId);
     delete preferences.pending_transaction_delete;
+    delete preferences.pending_transaction_delete_all;
     delete preferences.pending_transaction_edit;
     await writePreferences(userId, preferences);
     answer = "✅ A operação foi cancelada. Nenhum lançamento foi alterado.";
@@ -1207,23 +1362,55 @@ async function sendText(chatId: number, userId: string, text: string) {
     answer = "⌛ A edição expirou. Peça para editar o lançamento novamente em linguagem natural.";
   } else if (/^\/confirmar\b/i.test(text.trim())) {
     const preferences = await readPreferences(userId);
-    const pending = preferences.pending_transaction_delete as { id?: string; created_at?: string } | undefined;
-    const createdAt = pending?.created_at ? Date.parse(pending.created_at) : 0;
-    if (!pending?.id || !createdAt || Date.now() - createdAt > 10 * 60 * 1000) {
-      delete preferences.pending_transaction_delete;
-      await writePreferences(userId, preferences);
-      answer = "⌛ Não há exclusão pendente válida. Diga que deseja excluir um lançamento para começar novamente.";
+    const pendingAll = preferences.pending_transaction_delete_all as { scope?: string; created_at?: string; count?: number } | undefined;
+    const allCreatedAt = pendingAll?.created_at ? Date.parse(pendingAll.created_at) : 0;
+    const allDeleteValid = Boolean(pendingAll && allCreatedAt && Date.now() - allCreatedAt <= 10 * 60 * 1000 &&
+      ["all", "expense", "income"].includes(String(pendingAll.scope)));
+    if (allDeleteValid) {
+      const scope = pendingAll!.scope as "all" | "expense" | "income";
+      const beforeCount = await countTransactions(userId, scope);
+      if (!beforeCount) {
+        delete preferences.pending_transaction_delete_all;
+        await writePreferences(userId, preferences);
+        answer = "📭 Não encontrei registros desse tipo para excluir. Nada foi apagado.";
+      } else {
+        const params = new URLSearchParams({ user_id: `eq.${userId}` });
+        if (scope === "expense" || scope === "income") params.set("kind", `eq.${scope}`);
+        const removed = await db(`transactions?${params.toString()}`, {
+          method: "DELETE", headers: { Prefer: "return=minimal" },
+        });
+        if (!removed.ok) throw new Error("Could not delete requested financial transaction set");
+        const afterCount = await countTransactions(userId, scope);
+        delete preferences.pending_transaction_delete_all;
+        delete preferences.pending_transaction_delete;
+        delete preferences.pending_transaction_edit;
+        await writePreferences(userId, preferences);
+        const removedCount = Math.max(0, beforeCount - afterCount);
+        const label = scope === "expense" ? "despesa(s)" : scope === "income" ? "receita(s)" : "registro(s) financeiro(s), entre despesas e receitas";
+        answer = removedCount > 0
+          ? `🗑️ <b>Exclusão concluída.</b> Removi ${removedCount} ${label}. Os registros financeiros selecionados foram apagados definitivamente.`
+          : "Não consegui confirmar a remoção dos registros. Confira seus lançamentos antes de tentar novamente.";
+      }
     } else {
-      const removed = await db(`transactions?id=eq.${encodeURIComponent(pending.id)}&user_id=eq.${encodeURIComponent(userId)}`, {
-        method: "DELETE", headers: { Prefer: "return=representation" },
-      });
-      if (!removed.ok) throw new Error("Could not delete transaction");
-      const deletedRows = await removed.json();
-      delete preferences.pending_transaction_delete;
-      await writePreferences(userId, preferences);
-      answer = Array.isArray(deletedRows) && deletedRows.length
-        ? "🗑️ <b>Lançamento excluído.</b> O registro foi removido e os totais serão recalculados nas consultas."
-        : "Não encontrei esse lançamento. Ele pode já ter sido removido; nenhum outro registro foi alterado.";
+      const pending = preferences.pending_transaction_delete as { id?: string; created_at?: string } | undefined;
+      const createdAt = pending?.created_at ? Date.parse(pending.created_at) : 0;
+      if (!pending?.id || !createdAt || Date.now() - createdAt > 10 * 60 * 1000) {
+        delete preferences.pending_transaction_delete;
+        delete preferences.pending_transaction_delete_all;
+        await writePreferences(userId, preferences);
+        answer = "⌛ Não há exclusão pendente válida. Diga naturalmente qual lançamento deseja apagar.";
+      } else {
+        const removed = await db(`transactions?id=eq.${encodeURIComponent(pending.id)}&user_id=eq.${encodeURIComponent(userId)}`, {
+          method: "DELETE", headers: { Prefer: "return=representation" },
+        });
+        if (!removed.ok) throw new Error("Could not delete transaction");
+        const deletedRows = await removed.json();
+        delete preferences.pending_transaction_delete;
+        await writePreferences(userId, preferences);
+        answer = Array.isArray(deletedRows) && deletedRows.length
+          ? "🗑️ <b>Lançamento excluído.</b> O registro foi removido e os totais serão recalculados nas consultas."
+          : "Não encontrei esse lançamento. Ele pode já ter sido removido; nenhum outro registro foi alterado.";
+      }
     }
   } else if (/^\/editar(?:\s+(\d+))?\s*$/i.test(text.trim())) {
     const match = text.trim().match(/^\/editar(?:\s+(\d+))?\s*$/i);
