@@ -109,6 +109,25 @@ function monthRange() {
   return { start, end, label: new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }) };
 }
 
+function completedWeekRange() {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone:"America/Fortaleza", year:"numeric", month:"2-digit", day:"2-digit" }).formatToParts(new Date());
+  const year = Number(parts.find(p => p.type === "year")?.value);
+  const month = Number(parts.find(p => p.type === "month")?.value);
+  const day = Number(parts.find(p => p.type === "day")?.value);
+  const today = new Date(Date.UTC(year, month - 1, day));
+  const currentMonday = new Date(today.getTime() - ((today.getUTCDay() + 6) % 7) * 86400000);
+  const previousMonday = new Date(currentMonday.getTime() - 7 * 86400000);
+  const previousPreviousMonday = new Date(currentMonday.getTime() - 14 * 86400000);
+  const iso = (value: Date) => value.toISOString().slice(0, 10);
+  const sunday = new Date(currentMonday.getTime() - 86400000);
+  return {
+    start: iso(previousMonday) + "T00:00:00-03:00", end: iso(currentMonday) + "T00:00:00-03:00",
+    previousStart: iso(previousPreviousMonday) + "T00:00:00-03:00", previousEnd: iso(previousMonday) + "T00:00:00-03:00",
+    startDate: iso(previousMonday),
+    label: previousMonday.toLocaleDateString("pt-BR", { timeZone:"UTC" }) + " a " + sunday.toLocaleDateString("pt-BR", { timeZone:"UTC" }),
+  };
+}
+
 function validIsoDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(value + "T12:00:00Z");
@@ -237,6 +256,46 @@ function totals(rows: TransactionRow[]) {
 
 
 
+async function buildWeeklyReport(userId: string): Promise<string> {
+  const range = completedWeekRange();
+  await backfillCategories(userId, range.start, range.end);
+  const [rows, previousRows, categoriesResponse] = await Promise.all([
+    getTransactions(userId, { from: range.start, to: range.end, limit: 1000 }),
+    getTransactions(userId, { from: range.previousStart, to: range.previousEnd, limit: 1000 }),
+    db("categories?user_id=eq." + encodeURIComponent(userId) + "&select=id,name,kind,icon"),
+  ]);
+  if (!categoriesResponse.ok) throw new Error("Could not read categories for weekly report");
+  const categories = await categoriesResponse.json();
+  const categoryMap = new Map<string, { name: string; icon: string }>();
+  for (const category of Array.isArray(categories) ? categories : []) categoryMap.set(category.id, { name: category.name, icon: category.icon || "📁" });
+  const current = totals(rows), previous = totals(previousRows);
+  const rate = current.income > 0 ? Math.round(current.balance / current.income * 100) : null;
+  const byCategory = new Map<string, number>();
+  for (const row of rows) if (row.kind === "expense" && row.category_id) byCategory.set(row.category_id, (byCategory.get(row.category_id) || 0) + Number(row.amount || 0));
+  const top = [...byCategory.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const topText = top.length ? top.map(([id, amount]) => {
+    const category = categoryMap.get(id);
+    return "• " + (category?.icon || "📁") + " <b>" + escapeHtml(category?.name || "Categoria") + "</b>: " + money(amount);
+  }).join("\n") : "Ainda não há despesas categorizadas nessa semana.";
+  let comparison = "Sem base suficiente para comparar com a semana anterior.";
+  if (previous.expense > 0) {
+    const pct = Math.round((current.expense - previous.expense) / previous.expense * 100);
+    comparison = pct > 0 ? "🔺 Despesas " + pct + "% maiores que na semana anterior." : pct < 0 ? "🔻 Despesas " + Math.abs(pct) + "% menores que na semana anterior." : "➡️ Despesas iguais às da semana anterior.";
+  } else if (current.expense > 0) comparison = "Houve despesas nesta semana; a semana anterior não teve despesas registradas.";
+  return "📊 <b>Relatório semanal · " + escapeHtml(range.label) + "</b>\n\n" +
+    "🟢 Receitas: <b>" + money(current.income) + "</b>\n🔴 Despesas: <b>" + money(current.expense) + "</b>\n" +
+    (current.balance >= 0 ? "💚" : "⚠️") + " Resultado: <b>" + money(current.balance) + "</b>\n" +
+    "📈 Taxa de economia: " + (rate === null ? "sem receitas registradas" : "<b>" + rate + "%</b>") + "\n" +
+    "🧾 Lançamentos: " + rows.length + "\n" + comparison + "\n\n<b>Maiores categorias de despesa</b>\n" + topText +
+    "\n\n<i>Calculado com os lançamentos registrados no período. Dados incompletos podem afetar a análise.</i>";
+}
+async function listActiveGoals(userId: string): Promise<any[]> {
+  const response = await db("goals?user_id=eq." + encodeURIComponent(userId) + "&status=eq.active&select=id,name,target_amount,current_amount,target_date,status,created_at&order=created_at.asc&limit=20");
+  if (!response.ok) throw new Error("Could not read financial goals");
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows : [];
+}
+
 type GeminiPart = Record<string, unknown>;
 type FinancialEntry = { kind: "income" | "expense"; amount: number; description: string };
 type GeminiDecision = { kind: "command" | "reply"; value: string } | { kind: "mixed"; value: string; reply: string } | { kind: "batch"; transactions: FinancialEntry[]; reply: string };
@@ -336,7 +395,10 @@ function looksLikeMultiFinancialMessage(text: string): boolean {
 }
 function isAllowedGeminiCommand(value: string): boolean {
   const v = value.trim();
-  return /^\/(?:start|ajuda|saldo|resumo|ultimas|relatorio|categorias|orcamentos|recorrentes|lembretes)\s*$/i.test(v)
+  return /^\/(?:start|ajuda|saldo|resumo|ultimas|relatorio|categorias|orcamentos|recorrentes|lembretes|metas)\s*$/i.test(v)
+    || /^\/relatorio\s+semanal(?:\s+(?:on|off|ativar|desativar))?\s*$/i.test(v)
+    || /^\/meta(?:\s+.+)?$/i.test(v)
+    || /^\/guardar\s+\d+\s+.+$/i.test(v)
     || /^\/(?:editar|excluir)(?:\s+\d+)?\s*$/i.test(v)
     || /^\/(?:confirmar|cancelar)\s*$/i.test(v)
     || /^\/(?:cancelarlembrete|pausarrecorrente)\s+\d+\s*$/i.test(v)
@@ -355,7 +417,7 @@ async function askGeminiIntent(userId: string, preferences: Record<string, unkno
     "Responda sempre como JSON válido com cinco propriedades: kind, value, reply, transactions e memory_updates. kind deve ser command, reply, mixed ou batch. Para command, reply ou mixed, preencha transactions com array vazio. Para batch, deixe value vazio. memory_updates é uma lista de fatos duradouros novos, curta e sem duplicatas.",
     "Use kind=command quando o pedido for uma operação existente; value deve ser o comando permitido ou uma frase de lançamento financeiro inequívoca.",
     "IMPORTANTE: se houver uma pergunta e exatamente um lançamento explícito, use kind=mixed; value contém só o lançamento e reply só a resposta. Se houver dois ou mais lançamentos, use kind=batch e transactions deve ter um objeto por lançamento, com kind income/expense, amount positivo numérico e description curta contendo apenas o motivo do lançamento. Nunca junte lançamentos nem inclua a pergunta nas descrições. Para perguntas sobre saldo ou totais reais, não invente valores; deixe reply vazio para a aplicação calcular após registrar. Exemplo: \"Quanto gastei este mês? Hoje paguei R$ 35 no almoço e recebi R$ 80 por um serviço\" => kind=batch, transactions=[{kind:expense,amount:35,description:almoço},{kind:income,amount:80,description:serviço}], reply vazio.",
-    "Comandos permitidos: /start, /saldo, /resumo, /relatorio, /ultimas, /categorias, /orcamentos, /recorrentes, /lembretes, /editar [número], /excluir [número], /confirmar, /cancelar, /cancelarlembrete [número], /pausarrecorrente [número], /lembrete [AAAA-MM-DD HH:MM título], /orcamento [categoria] [valor], /recorrente [receita|despesa] [valor] [descrição] [semanal|mensal|anual] [AAAA-MM-DD].",
+    "Comandos permitidos: /start, /saldo, /resumo, /relatorio, /relatorio semanal [on|off], /ultimas, /categorias, /orcamentos, /meta [valor] [nome] [AAAA-MM-DD], /metas, /guardar [número] [valor], /recorrentes, /lembretes, /editar [número], /excluir [número], /confirmar, /cancelar, /cancelarlembrete [número], /pausarrecorrente [número], /lembrete [AAAA-MM-DD HH:MM título], /orcamento [categoria] [valor], /recorrente [receita|despesa] [valor] [descrição] [semanal|mensal|anual] [AAAA-MM-DD].",
     "Se faltar informação para uma operação, use kind=reply e faça uma pergunta curta. Nunca invente valores, datas, categorias ou itens.",
     "Se perguntarem o que você lembra, consulte a memória persistente e o histórico disponível. Se perguntarem sobre a primeira mensagem, responda com base no histórico real, sem inventar.",
     "Excluir ou modificar dados só pode passar pelo fluxo de confirmação já existente; não diga que uma ação foi concluída quando você só a sugeriu.",
@@ -540,6 +602,33 @@ function naturalBudgetCommand(raw: string, normalized: string): string | null {
   return "/orcamento " + category + " " + amount;
 }
 
+function naturalGoalCommand(raw: string, normalized: string): string | null {
+  if (/\b(?:minhas metas|meus objetivos financeiros|listar metas|mostrar metas|ver metas|quais sao minhas metas|como estao minhas metas)\b/.test(normalized)) return "/metas";
+  if (/\b(?:desativar|desligar|parar|nao quero receber)\b.{0,35}\brelatorios? semanais?\b/.test(normalized)) return "/relatorio semanal off";
+  if (/\b(?:ativar|reativar|ligar|quero receber)\b.{0,35}\brelatorios? semanais?\b/.test(normalized)) return "/relatorio semanal on";
+  if (/\b(?:relatorio semanal|resumo semanal|semana financeira|como foram minhas financas na semana)\b/.test(normalized)) return "/relatorio semanal";
+  const contribution = /\b(?:guardei|depositei|adicionei|contribui|coloquei|somei|poupei)\b/.test(normalized) && /\b(?:meta|objetivo)\b/.test(normalized);
+  if (contribution) {
+    const indexMatch = raw.match(/\b(?:meta|objetivo)\s*(?:numero\s*)?(?:#\s*)?(\d+)\b/i);
+    const withoutIndex = raw.replace(/\b(?:meta|objetivo)\s*(?:numero\s*)?(?:#\s*)?\d+\b/i, " ");
+    const amountMatch = withoutIndex.replace(/\b20\d{2}-\d{2}-\d{2}\b/g, " ").match(/(?<![\d.,])(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?(?![\d.,])/i);
+    if (indexMatch && amountMatch) return "/guardar " + Number(indexMatch[1]) + " " + amountMatch[0].replace(/^R\$\s*/i, "").trim();
+    return "/metas";
+  }
+  const createCue = /\b(?:criar|crie|definir|defina|meta|objetivo|juntar|guardar|poupar|economizar|acumular)\b/.test(normalized);
+  if (!createCue || /^(?:quanto|qual|quais|como|por que|porque)\b/.test(normalized)) return null;
+  const withoutDate = raw.replace(/\b20\d{2}-\d{2}-\d{2}\b/g, " ");
+  const amountMatch = withoutDate.match(/(?<![\d.,])(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?(?![\d.,])/i);
+  if (!amountMatch) return "/meta";
+  const amount = amountMatch[0].replace(/^R\$\s*/i, "").trim();
+  const dateMatch = raw.match(/\b20\d{2}-\d{2}-\d{2}\b/);
+  const name = raw.replace(amountMatch[0], " ").replace(/\b20\d{2}-\d{2}-\d{2}\b/g, " ")
+    .replace(/\b(?:por favor|quero|preciso|planejo|planejar|criar|crie|definir|defina|meta|metas|objetivo|objetivos|financeira|financeiro|juntar|guarde|guardar|poupar|economizar|acumular|comprar|adquirir|para|pra|ate|até|de|do|da|dos|das|um|uma|meu|minha|meus|minhas|valor|dinheiro|reais?|real)\b/ig, " ")
+    .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "").slice(0, 100);
+  if (!name) return "/meta";
+  return "/meta " + amount + " " + name + (dateMatch ? " " + dateMatch[0] : "");
+}
+
 function normalizeNaturalCommand(raw: string, preferences: Record<string, unknown>): string {
   const text = raw.trim();
   if (!text || text.startsWith("/")) return text;
@@ -556,6 +645,8 @@ function normalizeNaturalCommand(raw: string, preferences: Record<string, unknow
   if (/^(?:oi|ola|bom dia|boa tarde|boa noite|ajuda|o que voce faz|como voce funciona)$/i.test(normalized)) return "/start";
 
   if (/\b(?:meus lembretes|quais lembretes|listar lembretes|mostrar lembretes|tenho lembretes|ver lembretes)\b/.test(normalized)) return "/lembretes";
+  const goalCommand = naturalGoalCommand(text, normalized);
+  if (goalCommand) return goalCommand;
   if (/\b(?:meus lancamentos recorrentes|minhas recorrencias|quais recorrencias|ver recorrencias|listar recorrencias|minhas contas fixas|minhas despesas fixas)\b/.test(normalized)) return "/recorrentes";
   if (/\b(?:meus orcamentos|ver meus orcamentos|acompanhar orcamento|como esta meu orcamento|mostrar orcamentos|listar orcamentos)\b/.test(normalized) && !/\d/.test(normalized)) return "/orcamentos";
 
@@ -793,6 +884,86 @@ async function sendText(chatId: number, userId: string, text: string) {
       await writePreferences(userId, preferences);
       answer = `⚠️ <b>Confirme a exclusão</b>\n\n${chosen.kind === "income" ? "Receita" : "Despesa"}: <b>${money(Number(chosen.amount) || 0)}</b>\nDescrição: ${escapeHtml(chosen.description || "Sem descrição")}\n\nResponda <b>“confirmo a exclusão”</b> para apagar ou <b>“cancelar”</b> para manter.`;
     }
+  } else if (/^\/meta(?:\s+.*)?$/i.test(text.trim())) {
+    const raw = text.trim().replace(/^\/meta\s*/i, "").trim();
+    const amountMatch = raw.match(/^((?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?)\s+(.+)$/i);
+    if (!raw || !amountMatch) {
+      answer = "🎯 <b>Criar uma meta financeira</b>\nEnvie o valor total e o nome da meta, com prazo opcional. Exemplo: <code>/meta 2000 Notebook 2027-06-30</code>.\n\nDepois, use <code>/metas</code> para ver o progresso e a recomendação adaptada ao seu histórico financeiro.";
+    } else {
+      const targetAmount = parseMoney(amountMatch[1].replace(/^R\$\s*/i, "").trim());
+      let details = amountMatch[2].trim();
+      const dateMatch = details.match(/\b20\d{2}-\d{2}-\d{2}\b/);
+      const targetDate = dateMatch ? dateMatch[0] : null;
+      if (targetDate && dateMatch) details = details.replace(dateMatch[0], " ").replace(/\s+/g, " ").trim();
+      const name = details.replace(/^[,;:\- ]+|[,;:\- ]+$/g, "").slice(0, 100);
+      if (!targetAmount || !name || (targetDate && (!validIsoDate(targetDate) || targetDate < localToday()))) {
+        answer = "Não consegui validar a meta. Use um valor positivo e, se informar prazo, uma data válida igual ou posterior a hoje. Exemplo: <code>/meta 2000 Notebook 2027-06-30</code>.";
+      } else {
+        const created = await db("goals", { method:"POST", headers:{Prefer:"return=representation"}, body:JSON.stringify({user_id:userId,name,target_amount:targetAmount,current_amount:0,target_date:targetDate,status:"active"}) });
+        if (!created.ok) throw new Error("Could not create financial goal");
+        answer = "✅ <b>Meta criada!</b>\n🎯 " + escapeHtml(name) + "\nValor-alvo: <b>" + money(targetAmount) + "</b>" +
+          (targetDate ? "\nPrazo: " + new Date(targetDate + "T12:00:00Z").toLocaleDateString("pt-BR", {timeZone:"UTC"}) : "\nPrazo: ainda não definido") +
+          "\n\nAcompanhe em <code>/metas</code>. A recomendação considera seus lançamentos recentes e pode mudar conforme a sobra financeira.";
+      }
+    }
+  } else if (/^\/metas\s*$/i.test(text.trim())) {
+    const goals = await listActiveGoals(userId);
+    if (!goals.length) {
+      answer = "🎯 <b>Você ainda não tem metas ativas.</b>\nCrie uma com <code>/meta 2000 Notebook 2027-06-30</code> ou sem prazo: <code>/meta 500 Reserva</code>.";
+    } else {
+      const from = new Date(Date.now() - 90 * 86400000).toISOString();
+      const to = new Date().toISOString();
+      const recentRows = await getTransactions(userId, {from,to,limit:1000});
+      const recent = totals(recentRows), avgSurplus = recent.balance / 3;
+      const enoughData = recentRows.length >= 5;
+      const lines = goals.map((goal: any, index: number) => {
+        const target = Number(goal.target_amount) || 0, current = Number(goal.current_amount) || 0;
+        const remaining = Math.max(0, target - current);
+        const pct = target > 0 ? Math.min(100, Math.round(current / target * 100)) : 0;
+        let adaptive = "Ainda há poucos lançamentos recentes para estimar um aporte com confiança.";
+        if (enoughData && avgSurplus > 0) {
+          if (goal.target_date) {
+            const daysLeft = Math.ceil((Date.parse(goal.target_date + "T23:59:59Z") - Date.now()) / 86400000);
+            if (daysLeft <= 0) adaptive = "O prazo passou. Defina uma nova data para recalcular o aporte.";
+            else {
+              const monthsLeft = Math.max(1, Math.ceil(daysLeft / 30.4375));
+              const required = remaining / monthsLeft;
+              adaptive = required > avgSurplus * 0.7
+                ? "Prazo apertado: seria necessário guardar " + money(required) + "/mês, acima de 70% da sobra média registrada (" + money(avgSurplus) + "/mês). Considere ampliar o prazo ou reduzir a meta."
+                : "Para chegar no prazo, reserve cerca de " + money(required) + "/mês. A sobra média estimada nos últimos 90 dias é " + money(avgSurplus) + "/mês.";
+            }
+          } else {
+            const suggested = Math.min(remaining, avgSurplus * 0.2);
+            adaptive = "Sugestão inicial: até " + money(suggested) + "/mês (20% da sobra média registrada de " + money(avgSurplus) + "/mês).";
+          }
+        } else if (enoughData && avgSurplus <= 0) adaptive = "Os lançamentos dos últimos 90 dias não mostram sobra média positiva. Revise receitas e despesas antes de definir um aporte.";
+        return (index + 1) + ". <b>" + escapeHtml(String(goal.name || "Meta")) + "</b> · " + pct + "%\n" +
+          "   Guardado: " + money(current) + " de " + money(target) + " · Faltam " + money(remaining) + "\n" +
+          "   " + (goal.target_date ? "Prazo: " + new Date(goal.target_date + "T12:00:00Z").toLocaleDateString("pt-BR", {timeZone:"UTC"}) : "Prazo não definido") + "\n" +
+          "   💡 " + adaptive;
+      });
+      answer = "🎯 <b>Suas metas financeiras</b>\n\n" + lines.join("\n\n") + "\n\n<i>As recomendações usam somente os lançamentos registrados. Atualize o que guardou com /guardar número valor.</i>";
+    }
+  } else if (/^\/guardar\s+\d+\s+.+$/i.test(text.trim())) {
+    const match = text.trim().match(/^\/guardar\s+(\d+)\s+((?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?)\s*$/i);
+    const amount = match ? parseMoney(match[2].replace(/^R\$\s*/i, "").trim()) : null;
+    const index = match ? Number(match[1]) : 0;
+    const goals = await listActiveGoals(userId);
+    if (!match || !amount || !index || index > goals.length) {
+      answer = "Não consegui identificar a meta e o valor. Veja suas metas com <code>/metas</code> e use, por exemplo, <code>/guardar 1 50</code>.";
+    } else {
+      const goal = goals[index - 1];
+      const nextAmount = (Number(goal.current_amount) || 0) + amount;
+      const completed = nextAmount >= Number(goal.target_amount);
+      const updated = await db("goals?id=eq." + encodeURIComponent(goal.id) + "&user_id=eq." + encodeURIComponent(userId) + "&status=eq.active", {
+        method:"PATCH", headers:{Prefer:"return=minimal"}, body:JSON.stringify({current_amount:nextAmount,status:completed?"completed":"active",updated_at:new Date().toISOString()}),
+      });
+      if (!updated.ok) throw new Error("Could not update financial goal progress");
+      answer = (completed ? "🏆 <b>Meta concluída!</b>" : "✅ <b>Progresso atualizado</b>") + "\n🎯 " + escapeHtml(String(goal.name || "Meta")) +
+        "\nGuardado: <b>" + money(nextAmount) + "</b> de " + money(Number(goal.target_amount)) +
+        (completed ? "\nVocê atingiu o valor-alvo. 🎉" : "\nFaltam " + money(Math.max(0, Number(goal.target_amount) - nextAmount)) + ".") +
+        "\n\nUse <code>/metas</code> para recalcular as recomendações.";
+    }
   } else if (/^\/orcamento(?:\s+.+)?$/i.test(text.trim())) {
     const raw = text.trim().replace(/^\/orcamento\s*/i, "").trim();
     const amountMatch = raw.match(/(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?\s*$/i);
@@ -844,6 +1015,17 @@ async function sendText(chatId: number, userId: string, text: string) {
       });
       answer = `🎯 <b>Orçamentos de ${escapeHtml(range.label)}</b>\n\n${lines.join("\n\n")}\n\n<i>Os gastos são calculados a partir dos lançamentos categorizados do mês.</i>`;
     }
+  } else if (/^\/relatorio\s+semanal\b/i.test(text.trim())) {
+    const match = text.trim().match(/^\/relatorio\s+semanal(?:\s+(on|off|ativar|desativar))?\s*$/i);
+    if (!match) answer = "Use <code>/relatorio semanal</code> para consultar a última semana completa, <code>/relatorio semanal on</code> para ativar o envio automático ou <code>/relatorio semanal off</code> para desativá-lo.";
+    else if (match[1]) {
+      const enabled = /^(?:on|ativar)$/i.test(match[1]);
+      const preferences = await readPreferences(userId);
+      preferences.weekly_reports_enabled = enabled;
+      await writePreferences(userId, preferences);
+      answer = enabled ? "✅ Relatórios semanais ativados. Vou enviar o resumo da semana anterior toda segunda-feira, às 9h (horário de Fortaleza)." :
+        "🔕 Relatórios semanais automáticos desativados. Você ainda pode pedir <code>/relatorio semanal</code> quando quiser.";
+    } else answer = await buildWeeklyReport(userId);
   } else if (/^\/relatorio\b/i.test(text.trim())) {
     const range = monthRange();
     await backfillCategories(userId, range.start, range.end);
@@ -1018,7 +1200,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     const label = entry.kind === "income" ? "Receita" : "Despesa";
     answer = `✅ <b>${label} registrada</b>\nValor: <b>${entry.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\nDescrição: ${escapeHtml(entry.description)}\n\nCategoria automática: ${escapeHtml(category.name)} ${category.icon}.${budgetNotice}`;
   } else if (/^\/(start|ajuda|help)\b/i.test(text.trim())) {
-    answer = "👋 <b>Oi! Eu sou a Íris.</b> 😄\n\nPode falar comigo do seu jeito! Registro receitas e despesas, acompanho seus orçamentos, vejo seu saldo e cuido dos lembretes e lançamentos recorrentes. Sem precisar falar como se estivesse preenchendo formulário.\n\nVocê pode dizer:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Todo mês pago 1.200 de aluguel\n\n🔒 Quando a IA estiver ativada, mensagens e áudios serão processados pelo Google Gemini. No nível gratuito, o conteúdo pode ser usado pelo Google para melhorar produtos. Evite enviar senhas ou dados bancários completos.";
+    answer = "👋 <b>Oi! Eu sou a Íris.</b> 😄\n\nPode falar comigo do seu jeito! Registro receitas e despesas, acompanho seus orçamentos, vejo seu saldo, metas e relatórios semanais, além de lembretes e lançamentos recorrentes.\n\nVocê pode dizer:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• <code>/relatorio semanal</code>\n• <code>/meta 2000 Notebook 2027-06-30</code> e <code>/metas</code>\n• <code>/guardar 1 50</code> para atualizar o que já guardou\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Todo mês pago 1.200 de aluguel\n\nOs relatórios semanais são enviados automaticamente às segundas, às 9h; use <code>/relatorio semanal off</code> para parar.\n\n🔒 Quando a IA estiver ativada, mensagens e áudios serão processados pelo Google Gemini. No nível gratuito, o conteúdo pode ser usado pelo Google para melhorar produtos. Evite enviar senhas ou dados bancários completos.";
   } else {
     answer = "Não peguei direitinho o que você quis dizer. 😅\n\nPode mandar do seu jeito, por exemplo:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• Como estão minhas finanças este mês?\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Defina meu orçamento de alimentação em 500 reais\n\nPara editar ou apagar um lançamento, também pode pedir isso em palavras. Antes de excluir, vou pedir confirmação.";
   }
