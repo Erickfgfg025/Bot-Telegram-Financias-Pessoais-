@@ -2066,7 +2066,11 @@ async function sendText(chatId: number, userId: string, text: string) {
     reply(chatId, answer),
   ]);
   if (!savedAssistant.ok) throw new Error("Could not save assistant response");
-  await sendOptionalAudioForCurrentReply(chatId, userId, answer, editPreferences);
+  // O /start e os comandos de ajuda ficam somente em texto para economizar créditos da ElevenLabs.
+  const isStartOrHelp = /^\/(?:start|ajuda|help)\b/i.test(originalText.trim());
+  if (!isStartOrHelp) {
+    await sendOptionalAudioForCurrentReply(chatId, userId, answer, editPreferences);
+  }
 }
 Deno.serve(async (req: Request) => {
   if (req.method === "GET") return json({ service: "iris-telegram-webhook", status: "ready" });
