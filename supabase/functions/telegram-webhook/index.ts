@@ -605,11 +605,11 @@ function naturalBudgetCommand(raw: string, normalized: string): string | null {
 function naturalGoalCommand(raw: string, normalized: string): string | null {
   const reportSubject = /\b(?:relatorios?|resumos?|balancos?|financas|gastos|despesas)\b/.test(normalized);
   const weeklyCadence = /\b(?:semanal|semana|semanalmente|toda semana|todas as semanas|toda segunda|toda segunda feira|todas as segundas)\b/.test(normalized);
-  const stopReports = /\b(?:desativar|desative|desliga|desligar|parar|cancele|cancelar|nao quero mais|nao receber)\b/.test(normalized);
+  const stopReports = /\b(?:desativar|desative|desliga|desligar|parar|cancele|cancelar|nao quero mais|nao quero receber|nao receber)\b/.test(normalized);
   const startReports = /\b(?:ativar|ative|reativar|reative|ligar|quero receber|me envie|me manda|mande|enviar|receber)\b/.test(normalized);
   if (reportSubject && weeklyCadence && stopReports) return "/relatorio semanal off";
   if (reportSubject && weeklyCadence && startReports) return "/relatorio semanal on";
-  if (/\b(?:relatorio semanal|resumo semanal|semana financeira|como foram minhas financas na semana|como foi minha semana financeira|fechamento semanal|balanco da semana|resumo da semana passada|relatorio da semana passada|gastos da semana passada|despesas da semana passada|ultimos 7 dias)\b/.test(normalized)) return "/relatorio semanal";
+  if (/\b(?:relatorio semanal|resumo semanal|semana financeira|como foram minhas financas na semana|como foi minha semana financeira|como foi minha semana|fechamento semanal|balanco da semana|resumo da semana passada|relatorio da semana passada|gastos da semana passada|despesas da semana passada|quanto gastei na semana passada|quanto recebi na semana passada|ultimos 7 dias)\b/.test(normalized)) return "/relatorio semanal";
   if (/\b(?:minhas metas|meus objetivos financeiros|listar metas|mostrar metas|ver metas|quais sao minhas metas|como estao minhas metas|acompanhar minhas metas|progresso das metas)\b/.test(normalized)) return "/metas";
 
   const contribution = /\b(?:guardei|depositei|adicionei|contribui|coloquei|somei|poupei|juntei|acrescentei)\b/.test(normalized) &&
