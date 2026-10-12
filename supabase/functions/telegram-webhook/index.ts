@@ -93,7 +93,6 @@ async function getAllTransactions(userId: string, scope: NaturalDeleteScope = "a
       select: "id,kind,amount,description,occurred_at,category_id",
       user_id: `eq.${userId}`,
       order: "occurred_at.desc,id.desc",
-      limit: String(pageSize),
     });
     if (scope === "expense" || scope === "income") params.set("kind", `eq.${scope}`);
     const response = await db(`transactions?${params.toString()}`, {
@@ -248,8 +247,8 @@ function parseNaturalFinancialDelete(raw: string): NaturalDeleteIntent | null {
 
   const saysAll = /\b(todos|todas|tudo|inteiro|inteira|historico completo|tudo que (?:eu )?registrei|todos os registros|todas as movimentacoes)\b/.test(normalized)
     && /\b(registro|registros|lancamento|lancamentos|transacao|transacoes|movimentacao|movimentacoes|financeiro|financeiros|financas|despesa|despesas|gasto|gastos|receita|receitas|entrada|entradas|renda|rendas)\b/.test(normalized);
-  const categoryBulk = /\b(?:as|todas as|todos os|minhas|meus|todas minhas|todos meus)\s+(?:despesas|gastos|saidas|receitas|entradas|rendas)\b/.test(normalized)
-    || /\b(?:apagar|apague|apaga|excluir|exclua|exclui|remover|remova|remove|deletar|delete|limpar|limpe)\s+(?:(?:todas?\s+)?(?:as\s+)?(?:minhas\s+)?)?(?:despesas|gastos|saidas|receitas|entradas|rendas)\b/.test(normalized);
+  const categoryBulk = /\b(?:as|os|todas as|todos os|minhas|meus|todas minhas|todos meus)\s+(?:despesas|gastos|saidas|receitas|entradas|rendas)\b/.test(normalized)
+    || /\b(?:apagar|apague|apaga|excluir|exclua|exclui|remover|remova|remove|deletar|delete|limpar|limpe)\s+(?:(?:todas?\s+)?(?:(?:as|os)\s+)?(?:minhas\s+)?)?(?:despesas|gastos|saidas|receitas|entradas|rendas)\b/.test(normalized);
   const financialHistory = /\b(?:todos os meus registros financeiros|todas as minhas movimentacoes financeiras|historico financeiro|todos os lancamentos financeiros|todas as receitas e despesas|receitas e despesas|tudo que registrei|tudo que lancei|todas as minhas financas|todos os registros|apagar tudo|apague tudo|apaga tudo|excluir tudo|exclua tudo|exclui tudo|remover tudo|remova tudo|limpar tudo|limpe tudo)\b/.test(normalized);
   if ((saysAll || categoryBulk || financialHistory) && scope === "any") scope = "all";
   if (saysAll || categoryBulk || financialHistory) return { mode: "all", scope: scope === "any" ? "all" : scope };
@@ -260,7 +259,7 @@ function parseNaturalFinancialDelete(raw: string): NaturalDeleteIntent | null {
     .replace(/^(?:de|do|da|dos|das|com|sobre|no|na|nos|nas)\s+/g, "")
     .replace(/\b(?:por favor|por gentileza|agora|pra mim|para mim|por completo)\b/g, "")
     .replace(/\s+/g, " ").trim();
-  const generic = /^(?:algo|alguma coisa|qualquer coisa|tudo|todas|todos|as despesas|os gastos|as receitas|os registros financeiros|isso|esse|essa|ele|ela)?$/;
+  const generic = /^(?:algo|alguma coisa|qualquer coisa|tudo|todas|todos|despesa|despesas|gasto|gastos|receita|receitas|registro|registros|lancamento|lancamentos|transacao|transacoes|entrada|entradas|saida|saidas|as despesas|os gastos|as receitas|os registros financeiros|isso|esse|essa|ele|ela)?$/;
   if (!query || generic.test(query)) {
     const refersToLatest = /\b(?:ultimo|ultima|mais recente|recente|essa despesa|esse gasto|essa receita|essa entrada|esse lancamento|essa transacao|ultima despesa|ultimo gasto|ultima receita|ultimo lancamento|ultima transacao)\b/.test(normalized);
     if (refersToLatest && (mentionsExpense || mentionsIncome || /\b(lancamento|transacao|movimentacao|gasto|despesa|receita|entrada|saida)\b/.test(normalized))) {
