@@ -616,7 +616,7 @@ function naturalGoalCommand(raw: string, normalized: string): string | null {
     return "/metas";
   }
   const createCue = /\b(?:criar|crie|definir|defina|meta|objetivo|juntar|guardar|poupar|economizar|acumular)\b/.test(normalized);
-  if (!createCue || /^(?:quanto|qual|quais|como|por que|porque)\b/.test(normalized)) return null;
+  if (!createCue || parseEntry(raw) || /^(?:quanto|qual|quais|como|por que|porque)\b/.test(normalized)) return null;
   const withoutDate = raw.replace(/\b20\d{2}-\d{2}-\d{2}\b/g, " ");
   const amountMatch = withoutDate.match(/(?<![\d.,])(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:[,.]\d{1,2})?(?![\d.,])/i);
   if (!amountMatch) return "/meta";
