@@ -27,6 +27,150 @@ async function telegram(method: string, payload: Record<string, unknown>) {
 async function reply(chatId: number, text: string) {
   await telegram("sendMessage", { chat_id: chatId, text, parse_mode: "HTML" });
 }
+
+function plainSpeechText(htmlText: string): string {
+  return htmlText
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, "\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, " ")
+    .replace(/[•▪◦]/g, ". ")
+    .replace(/[|*_\x60]/g, " ")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function envNumber(name: string, fallback: number, min: number, max: number): number {
+  const raw = env(name);
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+}
+
+/**
+ * Gera fala com a voz escolhida na conta ElevenLabs e envia um MP3 ao Telegram.
+ * Erros de TTS nunca impedem que a resposta textual seja entregue.
+ */
+async function sendElevenLabsAudio(chatId: number, htmlText: string): Promise<boolean> {
+  const apiKey = env("ELEVENLABS_API_KEY");
+  const voiceId = env("ELEVENLABS_VOICE_ID");
+  const telegramToken = env("TELEGRAM_BOT_TOKEN");
+  if (!apiKey || !voiceId || !telegramToken) return false;
+
+  const speechText = plainSpeechText(htmlText);
+  if (!speechText || speechText.length > 1800) return false;
+
+  const voiceSettings: Record<string, unknown> = {
+    stability: envNumber("ELEVENLABS_STABILITY", 0.45, 0, 1),
+    similarity_boost: envNumber("ELEVENLABS_SIMILARITY_BOOST", 0.75, 0, 1),
+    style: envNumber("ELEVENLABS_STYLE", 0.15, 0, 1),
+    speed: envNumber("ELEVENLABS_SPEED", 1, 0.25, 4),
+    use_speaker_boost: env("ELEVENLABS_SPEAKER_BOOST").toLowerCase() !== "false",
+  };
+
+  let ttsResponse: Response;
+  try {
+    ttsResponse = await fetch(
+      "https://api.elevenlabs.io/v1/text-to-speech/" + encodeURIComponent(voiceId) + "?output_format=mp3_44100_128",
+      {
+        method: "POST",
+        headers: { "xi-api-key": apiKey, "content-type": "application/json" },
+        body: JSON.stringify({
+          text: speechText,
+          model_id: env("ELEVENLABS_MODEL_ID") || "eleven_multilingual_v2",
+          voice_settings: voiceSettings,
+        }),
+      },
+    );
+  } catch (error) {
+    console.error("ElevenLabs request failed", error instanceof Error ? error.message : "network error");
+    return false;
+  }
+
+  if (!ttsResponse.ok) {
+    console.error("ElevenLabs TTS returned HTTP", ttsResponse.status);
+    try { await ttsResponse.body?.cancel(); } catch { /* Ignore response cleanup errors. */ }
+    return false;
+  }
+
+  let audioBytes: ArrayBuffer;
+  try {
+    audioBytes = await ttsResponse.arrayBuffer();
+  } catch {
+    console.error("Could not read ElevenLabs audio response");
+    return false;
+  }
+  if (!audioBytes.byteLength || audioBytes.byteLength > 20 * 1024 * 1024) {
+    console.error("ElevenLabs audio response is empty or exceeds the upload safety limit");
+    return false;
+  }
+
+  try {
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    form.append("title", "Íris • Resposta em voz");
+    form.append("performer", "Íris");
+    form.append("caption", "🔊 Resposta em áudio");
+    form.append("audio", new Blob([audioBytes], { type: "audio/mpeg" }), "iris-resposta.mp3");
+    const response = await fetch("https://api.telegram.org/bot" + telegramToken + "/sendAudio", {
+      method: "POST",
+      body: form,
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok || result?.ok !== true) {
+      console.error("Telegram audio upload failed", response.status);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.error("Telegram audio delivery failed", error instanceof Error ? error.message : "unknown error");
+    return false;
+  }
+}
+
+async function replyWithOptionalAudio(
+  chatId: number,
+  userId: string,
+  text: string,
+  preferences?: Record<string, unknown>,
+): Promise<void> {
+  await reply(chatId, text);
+  let userPreferences = preferences;
+  if (!userPreferences) {
+    try { userPreferences = await readPreferences(userId); }
+    catch (error) {
+      console.error("Could not read voice preference", error instanceof Error ? error.message : "unknown error");
+      return;
+    }
+  }
+  if (userPreferences.voice_reply_enabled === false) return;
+  try {
+    await sendElevenLabsAudio(chatId, text);
+  } catch (error) {
+    console.error("Optional voice reply failed", error instanceof Error ? error.message : "unknown error");
+  }
+}
+
+async function sendOptionalAudioForCurrentReply(
+  chatId: number,
+  userId: string,
+  text: string,
+  preferences: Record<string, unknown>,
+): Promise<void> {
+  if (preferences.voice_reply_enabled === false) return;
+  try { await sendElevenLabsAudio(chatId, text); }
+  catch (error) { console.error("Optional voice reply failed", error instanceof Error ? error.message : "unknown error"); }
+}
+
 function parseMoney(raw: string): number | null {
   const normalized = raw.replace(/\s/g, "").replace(/\.(?=\d{3}(?:,|$))/g, "").replace(",", ".");
   const value = Number(normalized);
@@ -675,7 +819,7 @@ async function processTelegramDocument(chatId: number, userId: string, fileId: s
     body: JSON.stringify({ user_id: userId, role: "assistant", content: answer.replace(/<[^>]*>/g, "") }),
   });
   if (!savedAssistant.ok) throw new Error("Could not save document analysis response");
-  await reply(chatId, answer);
+  await replyWithOptionalAudio(chatId, userId, answer);
 }
 
 
@@ -1093,6 +1237,19 @@ function normalizeNaturalCommand(raw: string, preferences: Record<string, unknow
   return text;
 }
 
+function parseVoiceControl(raw: string): "enable" | "disable" | "status" | "test" | null {
+  const normalized = normalizeText(raw).replace(/[!?.,]+$/g, "").replace(/\s+/g, " ").trim();
+  if (/^(?:\/voz\s+(?:teste|testar)|(?:\/voz\s+)?(?:teste de voz|testar voz|experimentar voz|voz teste))$/.test(normalized)) return "test";
+  if (/^(?:\/voz|voz|configurar voz|status da voz|configuracao da voz|como esta a voz)$/.test(normalized)) return "status";
+  if (/^(?:\/voz\s+(?:on|ativar)|ativar voz|ative a voz|liga a voz|ligue a voz|responda por voz|responda com audio|quero audio|quero resposta por voz|quero respostas em audio|fale comigo por audio|ativar respostas faladas)$/.test(normalized)) return "enable";
+  if (/^(?:\/voz\s+(?:off|desativar)|desativar voz|desative a voz|desliga a voz|desligue a voz|responda so por texto|responda somente por texto|nao mande audio|nao envie audio|sem audio|quero so texto|quero somente texto|desativar respostas faladas)$/.test(normalized)) return "disable";
+  return null;
+}
+
+function voiceSetupInstructions(): string {
+  return "Para ativar a voz, configure estas Secrets no Supabase, em Edge Functions: <code>ELEVENLABS_API_KEY</code> e <code>ELEVENLABS_VOICE_ID</code>. Crie ou personalize sua voz no ElevenLabs e use o ID dela. Não envie sua chave aqui no Telegram nem a coloque no GitHub.";
+}
+
 async function sendText(chatId: number, userId: string, text: string) {
   const savedUser = await db("conversation_messages", {
     method: "POST", headers: { Prefer: "return=minimal" },
@@ -1107,6 +1264,46 @@ async function sendText(chatId: number, userId: string, text: string) {
       editPreferences.memory_facts = normalizedFacts;
       await writePreferences(userId, editPreferences);
     }
+  }
+  const voiceControl = parseVoiceControl(originalText);
+  if (voiceControl) {
+    const voiceConfigured = Boolean(env("ELEVENLABS_API_KEY") && env("ELEVENLABS_VOICE_ID"));
+    if (voiceControl === "enable") editPreferences.voice_reply_enabled = true;
+    if (voiceControl === "disable") editPreferences.voice_reply_enabled = false;
+    if (voiceControl === "enable" || voiceControl === "disable") await writePreferences(userId, editPreferences);
+
+    let voiceAnswer: string;
+    if (voiceControl === "enable") {
+      voiceAnswer = voiceConfigured
+        ? "🔊 <b>Voz ativada!</b> Vou continuar enviando o texto e também o áudio, usando a voz configurada no ElevenLabs."
+        : "🔊 <b>Voz ativada nas preferências.</b> Falta conectar o ElevenLabs para os áudios começarem a chegar.\n\n" + voiceSetupInstructions();
+    } else if (voiceControl === "disable") {
+      voiceAnswer = "📝 <b>Voz desativada.</b> A partir de agora, vou responder somente por texto. Diga <code>/voz on</code> para reativar.";
+    } else if (voiceControl === "test") {
+      voiceAnswer = voiceConfigured
+        ? "🎙️ Vou enviar uma amostra com a voz personalizada da Íris."
+        : "🎙️ Ainda não consigo gerar a amostra porque o ElevenLabs não está configurado.\n\n" + voiceSetupInstructions();
+    } else {
+      const enabled = editPreferences.voice_reply_enabled !== false;
+      voiceAnswer = "🎙️ <b>Configuração de voz da Íris</b>\nStatus: <b>" + (enabled ? "ativada" : "desativada") + "</b>\nElevenLabs: <b>" + (voiceConfigured ? "conectado" : "aguardando configuração") + "</b>\n\n" +
+        (voiceConfigured ? "Você controla a voz pelo ID definido em <code>ELEVENLABS_VOICE_ID</code> nas Secrets do Supabase." : voiceSetupInstructions()) +
+        "\n\nComandos: <code>/voz teste</code>, <code>/voz on</code>, <code>/voz off</code>.";
+    }
+    const savedVoiceAnswer = await db("conversation_messages", {
+      method: "POST", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ user_id: userId, role: "assistant", content: voiceAnswer.replace(/<[^>]*>/g, "") }),
+    });
+    if (!savedVoiceAnswer.ok) throw new Error("Could not save voice configuration response");
+    await reply(chatId, voiceAnswer);
+    if (voiceConfigured && (voiceControl === "test" || (voiceControl === "enable" && editPreferences.voice_reply_enabled !== false) || (voiceControl === "status" && editPreferences.voice_reply_enabled !== false))) {
+      const sampleText = voiceControl === "test"
+        ? "Olá! Eu sou a Íris. Esta é a voz que você personalizou no ElevenLabs."
+        : voiceControl === "enable"
+          ? "Pronto, a voz da Íris está ativada. Vou responder com texto e áudio."
+          : "A voz da Íris está " + (editPreferences.voice_reply_enabled === false ? "desativada." : "ativada.");
+      await sendElevenLabsAudio(chatId, sampleText);
+    }
+    return;
   }
   const pendingBulkAtStart = editPreferences.pending_transaction_delete_all as { created_at?: string } | undefined;
   const pendingBulkTimeAtStart = pendingBulkAtStart?.created_at ? Date.parse(pendingBulkAtStart.created_at) : 0;
@@ -1770,7 +1967,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     const label = entry.kind === "income" ? "Receita" : "Despesa";
     answer = `✅ <b>${label} registrada</b>\nValor: <b>${entry.amount.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b>\nDescrição: ${escapeHtml(entry.description)}\n\nCategoria automática: ${escapeHtml(category.name)} ${category.icon}.${budgetNotice}`;
   } else if (/^\/(start|ajuda|help)\b/i.test(text.trim())) {
-    answer = "👋 <b>Oi! Eu sou a Íris.</b> 😄\n\nPode falar comigo do seu jeito! Registro receitas e despesas, acompanho seus orçamentos, vejo seu saldo, metas e relatórios semanais, além de lembretes e lançamentos recorrentes.\n\nVocê pode dizer:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• <code>/relatorio semanal</code>\n• <code>/meta 2000 Notebook 2027-06-30</code> e <code>/metas</code>\n• <code>/guardar 1 50</code> para atualizar o que já guardou\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Todo mês pago 1.200 de aluguel\n\nOs relatórios semanais são enviados automaticamente às segundas, às 9h; use <code>/relatorio semanal off</code> para parar.\n\n🔒 Quando a IA estiver ativada, mensagens e áudios serão processados pelo Google Gemini. No nível gratuito, o conteúdo pode ser usado pelo Google para melhorar produtos. Evite enviar senhas ou dados bancários completos.";
+    answer = "👋 <b>Oi! Eu sou a Íris.</b> 😄\n\nPode falar comigo do seu jeito! Registro receitas e despesas, acompanho seus orçamentos, vejo seu saldo, metas e relatórios semanais, além de lembretes e lançamentos recorrentes.\n\nVocê pode dizer:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• <code>/relatorio semanal</code>\n• <code>/meta 2000 Notebook 2027-06-30</code> e <code>/metas</code>\n• <code>/guardar 1 50</code> para atualizar o que já guardou\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Todo mês pago 1.200 de aluguel\n• Personalize minha voz no ElevenLabs e teste com <code>/voz teste</code>\n• Use <code>/voz off</code> para responder só por texto\n\nOs relatórios semanais são enviados automaticamente às segundas, às 9h; use <code>/relatorio semanal off</code> para parar.\n\n🔒 Quando a IA estiver ativada, mensagens e áudios serão processados pelo Google Gemini. No nível gratuito, o conteúdo pode ser usado pelo Google para melhorar produtos. Evite enviar senhas ou dados bancários completos.";
   } else {
     answer = "Posso conversar com você sobre isso também. 🙂 Só preciso de um pouco mais de contexto para entender: o que você quis dizer? Pode escrever do seu jeito, mesmo com abreviações ou erros."; 
   }
@@ -1785,6 +1982,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     reply(chatId, answer),
   ]);
   if (!savedAssistant.ok) throw new Error("Could not save assistant response");
+  await sendOptionalAudioForCurrentReply(chatId, userId, answer, editPreferences);
 }
 Deno.serve(async (req: Request) => {
   if (req.method === "GET") return json({ service: "iris-telegram-webhook", status: "ready" });
