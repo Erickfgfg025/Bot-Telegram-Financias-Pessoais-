@@ -32,6 +32,12 @@ Os valores abaixo são variáveis de ambiente opcionais:
 
 O ID da voz é o principal controle da identidade vocal. Por padrão, a integração respeita os ajustes de voz salvos no ElevenLabs. Defina as variáveis opcionais no Supabase somente para sobrescrever estabilidade, similaridade, estilo, velocidade ou speaker boost.
 
+## Pronúncia natural em português brasileiro
+
+A integração prepara o texto específico para fala antes de enviar ao ElevenLabs. Valores monetários como `R$ 1.234,56` são convertidos para palavras, por exemplo, “mil duzentos e trinta e quatro reais e cinquenta e seis centavos”. Alguns rótulos de saldo e resumo também são reescritos para soarem mais naturais quando falados. A mensagem original exibida no Telegram permanece inalterada.
+
+Para um sotaque nordestino autêntico, escolha no ElevenLabs uma voz que já tenha esse sotaque ou use uma voz personalizada treinada com fala nordestina. Os controles de estabilidade, similaridade e velocidade ajustam a entrega, mas não convertem sozinhos uma voz de outra região em um sotaque nordestino.
+
 ## Controles no Telegram
 
 - `/voz`: mostra o status e as instruções de configuração.
