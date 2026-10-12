@@ -734,8 +734,12 @@ async function sendText(chatId: number, userId: string, text: string) {
 
   // Responda perguntas sobre a primeira mensagem usando o histórico real salvo, sem depender da interpretação do Gemini.
   const normalizedQuestion = normalizeText(originalText);
+  // Perguntas simples sobre a identidade da assistente não dependem da API externa.
+  if (/\b(?:como se chama|como voce se chama|como vc se chama|qual e seu nome|qual seu nome|quem e voce|nome da assistente|nome do bot)\b/.test(normalizedQuestion)) {
+    aiConversationReply = "Eu sou a Íris! 😊 Sua assistente financeira aqui no Telegram. Pode falar comigo normalmente, do seu jeito.";
+  }
   const asksFirstMessage = /\b(?:qual foi|lembra|lembra qual|me diz|diz)\b.{0,55}\b(?:primeira|primeiro)\b.{0,45}\b(?:mensagem|coisa que eu disse|coisa que te mandei|texto que te mandei)\b|\b(?:primeira|primeiro)\b.{0,45}\b(?:mensagem)\b.{0,45}\b(?:te mandei|que mandei|que enviei|que eu disse|que te enviei)\b/.test(normalizedQuestion);
-  if (asksFirstMessage) {
+  if (!aiConversationReply && asksFirstMessage) {
     const firstMessageResponse = await db("conversation_messages?user_id=eq." + encodeURIComponent(userId) + "&role=eq.user&select=content,created_at&order=created_at.asc&limit=1");
     if (firstMessageResponse.ok) {
       const firstMessages = await firstMessageResponse.json();
@@ -1214,7 +1218,7 @@ async function sendText(chatId: number, userId: string, text: string) {
   } else if (/^\/(start|ajuda|help)\b/i.test(text.trim())) {
     answer = "👋 <b>Oi! Eu sou a Íris.</b> 😄\n\nPode falar comigo do seu jeito! Registro receitas e despesas, acompanho seus orçamentos, vejo seu saldo, metas e relatórios semanais, além de lembretes e lançamentos recorrentes.\n\nVocê pode dizer:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• <code>/relatorio semanal</code>\n• <code>/meta 2000 Notebook 2027-06-30</code> e <code>/metas</code>\n• <code>/guardar 1 50</code> para atualizar o que já guardou\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Todo mês pago 1.200 de aluguel\n\nOs relatórios semanais são enviados automaticamente às segundas, às 9h; use <code>/relatorio semanal off</code> para parar.\n\n🔒 Quando a IA estiver ativada, mensagens e áudios serão processados pelo Google Gemini. No nível gratuito, o conteúdo pode ser usado pelo Google para melhorar produtos. Evite enviar senhas ou dados bancários completos.";
   } else {
-    answer = "Não peguei direitinho o que você quis dizer. 😅\n\nPode mandar do seu jeito, por exemplo:\n• Gastei 25,90 no almoço\n• Recebi 1.000 reais de um freela\n• Quanto tenho de saldo?\n• Como estão minhas finanças este mês?\n• Me lembre amanhã às 9 de pagar a conta de luz\n• Defina meu orçamento de alimentação em 500 reais\n\nPara editar ou apagar um lançamento, também pode pedir isso em palavras. Antes de excluir, vou pedir confirmação.";
+    answer = "Posso conversar com você sobre isso também. 🙂 Só preciso de um pouco mais de contexto para entender: o que você quis dizer? Pode escrever do seu jeito, mesmo com abreviações ou erros."; 
   }
   if (aiSupplementaryReply && entry && !aiConversationReply) {
     answer = `💬 <b>Resposta</b>\n${escapeHtml(aiSupplementaryReply)}\n\n${answer}`;
