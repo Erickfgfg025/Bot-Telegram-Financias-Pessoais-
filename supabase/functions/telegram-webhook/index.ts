@@ -49,6 +49,64 @@ function plainSpeechText(htmlText: string): string {
     .trim();
 }
 
+function ptBrUnderThousand(value: number): string {
+  const n = Math.floor(Math.abs(value));
+  const units = ["zero", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove"];
+  const teens = ["dez", "onze", "doze", "treze", "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"];
+  const tens = ["", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"];
+  const hundreds = ["", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "seiscentos", "setecentos", "oitocentos", "novecentos"];
+  if (n < 10) return units[n];
+  if (n < 20) return teens[n - 10];
+  if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? " e " + units[n % 10] : "");
+  if (n === 100) return "cem";
+  const rest = n % 100;
+  return hundreds[Math.floor(n / 100)] + (rest ? " e " + ptBrUnderThousand(rest) : "");
+}
+
+function ptBrIntegerWords(value: number): string {
+  const n = Math.floor(Math.abs(value));
+  if (n < 1000) return ptBrUnderThousand(n);
+  if (n < 1_000_000) {
+    const thousands = Math.floor(n / 1000);
+    const rest = n % 1000;
+    const left = thousands === 1 ? "mil" : ptBrUnderThousand(thousands) + " mil";
+    if (!rest) return left;
+    return left + (rest < 100 || rest % 100 === 0 ? " e " : " ") + ptBrUnderThousand(rest);
+  }
+  if (n < 1_000_000_000) {
+    const millions = Math.floor(n / 1_000_000);
+    const rest = n % 1_000_000;
+    const left = millions === 1 ? "um milhão" : ptBrIntegerWords(millions) + " milhões";
+    if (!rest) return left;
+    return left + (rest < 100 || rest % 100 === 0 || rest === 1000 ? " e " : " ") + ptBrIntegerWords(rest);
+  }
+  return n.toLocaleString("pt-BR");
+}
+
+function currencyForSpeech(_match: string, prefix: string, rawAmount: string): string {
+  const negative = prefix.trim().startsWith("-");
+  const normalized = rawAmount.replace(/\./g, "").replace(",", ".");
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || Math.abs(parsed) >= 1_000_000_000) return _match;
+  const totalCents = Math.round(Math.abs(parsed) * 100);
+  const reais = Math.floor(totalCents / 100);
+  const cents = totalCents % 100;
+  let spoken = ptBrIntegerWords(reais) + (reais === 1 ? " real" : " reais");
+  if (cents > 0) spoken += " e " + ptBrIntegerWords(cents) + (cents === 1 ? " centavo" : " centavos");
+  return (negative || parsed < 0 ? "menos " : "") + spoken;
+}
+
+function prepareNaturalSpeech(htmlText: string): string {
+  const plain = plainSpeechText(htmlText)
+    .replace(/\bSeu saldo registrado\b/gi, "Bora conferir suas contas.")
+    .replace(/\bReceitas:\s*/gi, "Dinheiro que entrou: ")
+    .replace(/\bDespesas:\s*/gi, "Dinheiro que saiu: ")
+    .replace(/\bSaldo:\s*/gi, "Seu saldo é de ")
+    .replace(/\bResultado do mês:\s*/gi, "O resultado do mês foi de ")
+    .replace(/\s+·\s+/g, ", ");
+  return plain.replace(/(-?\s*)R\$\s*((?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{1,2})?)/gi, currencyForSpeech);
+}
+
 function envNumber(name: string, fallback: number, min: number, max: number): number {
   const raw = env(name);
   if (!raw) return fallback;
@@ -66,7 +124,7 @@ async function sendElevenLabsAudio(chatId: number, htmlText: string): Promise<bo
   const telegramToken = env("TELEGRAM_BOT_TOKEN");
   if (!apiKey || !voiceId || !telegramToken) return false;
 
-  const speechText = plainSpeechText(htmlText);
+  const speechText = prepareNaturalSpeech(htmlText);
   if (!speechText || speechText.length > 1800) return false;
 
   // Deixe os ajustes salvos na própria voz do ElevenLabs prevalecerem.
