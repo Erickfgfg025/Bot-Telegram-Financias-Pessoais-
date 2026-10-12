@@ -120,7 +120,7 @@ function envNumber(name: string, fallback: number, min: number, max: number): nu
  */
 async function sendElevenLabsAudio(chatId: number, htmlText: string): Promise<boolean> {
   const apiKey = env("ELEVENLABS_API_KEY");
-  const voiceId = "HOfBIVLhom4mc9WvXfyH"; // Voz selecionada para a Íris
+  const voiceId = "xYnGQImyPab84FJUPA2n"; // Voz selecionada para a Íris
   const telegramToken = env("TELEGRAM_BOT_TOKEN");
   if (!apiKey || !voiceId || !telegramToken) return false;
 
