@@ -1190,6 +1190,8 @@ function naturalMonthlyReminderCommand(raw: string, normalized: string): string 
     .replace(/\b(?:na verdade|cada mes)\b/ig, " ")
     .replace(/\s+/g, " ")
     .replace(/(?:,\s*){2,}/g, ", ")
+    .replace(/\s+([,;])/g, "$1")
+    .replace(/,\s*(?=R\$)/gi, " - ")
     .replace(/^\s*(?:de|para|pra|que)\s+/i, "")
     .trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "").slice(0, 180);
   if (!title) return "/lembremensal";
