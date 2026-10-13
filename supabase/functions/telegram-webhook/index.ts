@@ -1554,9 +1554,9 @@ async function sendText(chatId: number, userId: string, text: string, options: S
         : "🎙️ Ainda não consigo gerar a amostra: configure GEMINI_API_KEY para a voz alternativa ou as Secrets do ElevenLabs para a voz principal.\n\n" + voiceSetupInstructions();
     } else {
       const enabled = editPreferences.voice_reply_enabled !== false;
-      voiceAnswer = "🎙️ <b>Configuração de voz da Íris</b>\nStatus: <b>" + (enabled ? "ativada" : "desativada") + "</b>\nElevenLabs: <b>" + (voiceConfigured ? "conectado" : "aguardando configuração") + "</b>\n\n" +
-        (voiceConfigured ? "Você controla a voz pelo ID definido em <code>ELEVENLABS_VOICE_ID</code> nas Secrets do Supabase." : voiceSetupInstructions()) +
-        "\n\nComandos: <code>/voz teste</code>, <code>/voz on</code>, <code>/voz off</code>.";
+      voiceAnswer = "🎙️ <b>Configuração de voz da Íris</b>\nStatus: <b>" + (enabled ? "ativada" : "desativada") + "</b>\nElevenLabs: <b>" + (elevenLabsConfigured ? "configurado" : "indisponível") + "</b>\nGemini TTS: <b>" + (geminiTtsConfigured ? "alternativa configurada" : "não configurado") + "</b>\n\nA Íris tenta ElevenLabs primeiro e usa Gemini TTS se falhar. " +
+        (elevenLabsConfigured ? "A voz principal usa <code>ELEVENLABS_VOICE_ID</code>." : "Configure as Secrets indicadas abaixo.") +
+        "\n\nComandos: <code>/voz teste</code>, <code>/voz on</code>, <code>/voz off</code>.\n\n" + voiceSetupInstructions();
     }
     const savedVoiceAnswer = await db("conversation_messages", {
       method: "POST", headers: { Prefer: "return=minimal" },
@@ -1566,7 +1566,7 @@ async function sendText(chatId: number, userId: string, text: string, options: S
     await reply(chatId, voiceAnswer);
     if (!options.suppressAudio && voiceConfigured && (voiceControl === "test" || (voiceControl === "enable" && editPreferences.voice_reply_enabled !== false) || (voiceControl === "status" && editPreferences.voice_reply_enabled !== false))) {
       const sampleText = voiceControl === "test"
-        ? "Olá! Eu sou a Íris. Esta é a voz que você personalizou no ElevenLabs."
+        ? "Olá! Eu sou a Íris. Esta é minha voz de resposta."
         : voiceControl === "enable"
           ? "Pronto, a voz da Íris está ativada. Vou responder com texto e áudio."
           : "A voz da Íris está " + (editPreferences.voice_reply_enabled === false ? "desativada." : "ativada.");
