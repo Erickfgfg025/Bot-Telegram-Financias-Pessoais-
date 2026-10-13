@@ -145,7 +145,7 @@ async function sendWeeklyReportsIfDue(now: Date): Promise<{sent:number;failed:nu
   return {sent,failed,skipped};
 }
 
-function nextDate(value: string, frequency: string): string {
+function nextDate(value: string, frequency: string, monthlyDay?: number | null): string {
   const [year, month, day] = value.split("-").map(Number);
   if (frequency === "weekly") return new Date(Date.UTC(year, month - 1, day + 7)).toISOString().slice(0, 10);
   if (frequency === "yearly") {
@@ -156,7 +156,8 @@ function nextDate(value: string, frequency: string): string {
   const targetMonth = month === 12 ? 1 : month + 1;
   const targetYear = month === 12 ? year + 1 : year;
   const lastDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
-  return targetYear + "-" + String(targetMonth).padStart(2, "0") + "-" + String(Math.min(day, lastDay)).padStart(2, "0");
+  const intendedDay = typeof monthlyDay === "number" && Number.isInteger(monthlyDay) && monthlyDay >= 1 && monthlyDay <= 31 ? monthlyDay : day;
+  return targetYear + "-" + String(targetMonth).padStart(2, "0") + "-" + String(Math.min(intendedDay, lastDay)).padStart(2, "0");
 }
 
 function nextMonthlyReminderAt(currentIso: string, day: number): string {
@@ -206,7 +207,7 @@ Deno.serve(async (req: Request) => {
         remindersSent++;
       } catch (error) { console.error("Reminder delivery failed", reminder.id, error instanceof Error ? error.message : "unknown error"); remindersFailed++; }
     }
-    const rulesResponse = await db("recurring_rules?active=eq.true&next_run_at=lte." + today + "&select=id,user_id,description,kind,amount,frequency,next_run_at,category_id&order=next_run_at.asc&limit=50");
+    const rulesResponse = await db("recurring_rules?active=eq.true&next_run_at=lte." + today + "&select=id,user_id,description,kind,amount,frequency,next_run_at,recurrence_day,category_id&order=next_run_at.asc&limit=50");
     if (!rulesResponse.ok) throw new Error("Could not read due recurring rules");
     const rules = await rulesResponse.json();
     let recurringCreated = 0, recurringFailed = 0;
@@ -225,7 +226,7 @@ Deno.serve(async (req: Request) => {
           }),
         });
         if (!inserted.ok) throw new Error("Could not create recurring transaction");
-        const next = nextDate(dueDate, rule.frequency);
+        const next = nextDate(dueDate, rule.frequency, rule.recurrence_day == null ? undefined : Number(rule.recurrence_day));
         const moved = await db("recurring_rules?id=eq." + encodeURIComponent(rule.id) + "&user_id=eq." + encodeURIComponent(rule.user_id) + "&next_run_at=eq." + dueDate, {
           method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ next_run_at: next }),
         });
@@ -237,7 +238,8 @@ Deno.serve(async (req: Request) => {
     }
     const weeklyReports = await sendWeeklyReportsIfDue(now);
     return json({ ok: true, date: today, reminders_sent: remindersSent, reminders_failed: remindersFailed, recurring_processed: recurringCreated, recurring_failed: recurringFailed, weekly_reports_sent: weeklyReports.sent, weekly_reports_failed: weeklyReports.failed, weekly_reports_skipped: weeklyReports.skipped });
-  } catch {
+  } catch (error) {
+    console.error("Scheduler processing failed", error instanceof Error ? error.message : "unknown error");
     return json({ error: "scheduler_processing_failed" }, 500);
   }
 });
