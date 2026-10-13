@@ -118,6 +118,100 @@ function envNumber(name: string, fallback: number, min: number, max: number): nu
  * Gera fala com a voz escolhida na conta ElevenLabs e envia um MP3 ao Telegram.
  * Erros de TTS nunca impedem que a resposta textual seja entregue.
  */
+
+/** Gemini TTS fallback. The free tier has quotas and may change. */
+async function sendGeminiFallbackAudio(chatId: number, htmlText: string): Promise<boolean> {
+  const apiKey = env("GEMINI_API_KEY");
+  const telegramToken = env("TELEGRAM_BOT_TOKEN");
+  if (!apiKey || !telegramToken) return false;
+  const speechText = prepareNaturalSpeech(htmlText);
+  if (!speechText || speechText.length > 1800) return false;
+  let response: Response;
+  try {
+    response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
+      method: "POST", headers: { "x-goog-api-key": apiKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: env("GEMINI_TTS_MODEL") || "gemini-3.8-flash-tts",
+        input: [{ type: "user_input", content: [{
+          type: "text", text: speechText,
+          annotations: [{ type: "speech_metadata", style: "Natural, clear, friendly Brazilian Portuguese, feminine voice, moderate pace" }],
+        }] }],
+        response_format: { type: "audio", mime_type: "audio/wav" },
+        generation_config: { speech_config: [{ voice: env("GEMINI_TTS_VOICE") || "Kore" }] },
+      }),
+    });
+  } catch (error) {
+    console.error("Gemini TTS request failed", error instanceof Error ? error.message : "network error");
+    return false;
+  }
+  if (!response.ok) {
+    console.error("Gemini TTS returned HTTP", response.status);
+    try { await response.body?.cancel(); } catch { /* Ignore cleanup errors. */ }
+    return false;
+  }
+  let payload: Record<string, unknown>;
+  try { payload = await response.json(); } catch { console.error("Gemini TTS returned invalid JSON"); return false; }
+  let audioBase64 = "";
+  const outputAudio = payload.output_audio as { data?: unknown } | undefined;
+  if (typeof outputAudio?.data === "string") audioBase64 = outputAudio.data;
+  if (!audioBase64 && Array.isArray(payload.steps)) {
+    for (const step of [...payload.steps].reverse()) {
+      if (!step || typeof step !== "object") continue;
+      const content = (step as { content?: unknown }).content;
+      if (!Array.isArray(content)) continue;
+      for (const item of [...content].reverse()) {
+        if (item && typeof item === "object" && (item as { type?: unknown }).type === "audio" &&
+            typeof (item as { data?: unknown }).data === "string") {
+          audioBase64 = (item as { data: string }).data;
+          break;
+        }
+      }
+      if (audioBase64) break;
+    }
+  }
+  if (!audioBase64) { console.error("Gemini TTS response contained no audio data"); return false; }
+  let audioBytes: Uint8Array;
+  try {
+    const binary = atob(audioBase64);
+    audioBytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) audioBytes[i] = binary.charCodeAt(i);
+  } catch { console.error("Gemini TTS payload was not valid base64"); return false; }
+  if (!audioBytes.byteLength || audioBytes.byteLength > 20 * 1024 * 1024) return false;
+
+  const upload = async (method: "sendAudio" | "sendDocument"): Promise<boolean> => {
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    form.append("caption", method === "sendAudio" ? "🔊 Resposta em áudio • voz alternativa da Íris" : "🔊 Áudio da Íris (WAV)");
+    if (method === "sendAudio") {
+      form.append("title", "Íris • Resposta em voz");
+      form.append("performer", "Íris");
+      form.append("audio", new Blob([audioBytes], { type: "audio/wav" }), "iris-resposta.wav");
+    } else {
+      form.append("document", new Blob([audioBytes], { type: "audio/wav" }), "iris-resposta.wav");
+    }
+    const sent = await fetch("https://api.telegram.org/bot" + telegramToken + "/" + method, { method: "POST", body: form });
+    const result = await sent.json().catch(() => null);
+    if (!sent.ok || result?.ok !== true) {
+      console.error("Telegram Gemini audio upload failed via " + method, sent.status);
+      return false;
+    }
+    return true;
+  };
+  try {
+    if (await upload("sendAudio")) return true;
+    return await upload("sendDocument");
+  } catch (error) {
+    console.error("Telegram Gemini audio delivery failed", error instanceof Error ? error.message : "network error");
+    return false;
+  }
+}
+async function sendVoiceAudio(chatId: number, htmlText: string): Promise<boolean> {
+  try { if (await sendElevenLabsAudio(chatId, htmlText)) return true; }
+  catch (error) { console.error("ElevenLabs failed; switching to Gemini TTS", error instanceof Error ? error.message : "unknown error"); }
+  console.log("Using Gemini TTS fallback after ElevenLabs failure");
+  return await sendGeminiFallbackAudio(chatId, htmlText);
+}
+
 async function sendElevenLabsAudio(chatId: number, htmlText: string): Promise<boolean> {
   const apiKey = env("ELEVENLABS_API_KEY");
   const voiceId = "xYnGQImyPab84FJUPA2n"; // Voz selecionada para a Íris
@@ -236,7 +330,7 @@ async function replyWithOptionalAudio(
   }
   if (userPreferences.voice_reply_enabled === false) return;
   try {
-    await sendElevenLabsAudio(chatId, text);
+    await sendVoiceAudio(chatId, text);
   } catch (error) {
     console.error("Optional voice reply failed", error instanceof Error ? error.message : "unknown error");
   }
@@ -249,7 +343,7 @@ async function sendOptionalAudioForCurrentReply(
   preferences: Record<string, unknown>,
 ): Promise<void> {
   if (preferences.voice_reply_enabled === false) return;
-  try { await sendElevenLabsAudio(chatId, text); }
+  try { await sendVoiceAudio(chatId, text); }
   catch (error) { console.error("Optional voice reply failed", error instanceof Error ? error.message : "unknown error"); }
 }
 
@@ -1419,7 +1513,7 @@ function parseVoiceControl(raw: string): "enable" | "disable" | "status" | "test
 }
 
 function voiceSetupInstructions(): string {
-  return "Para ativar a voz, configure estas Secrets no Supabase, em Edge Functions: <code>ELEVENLABS_API_KEY</code> e <code>ELEVENLABS_VOICE_ID</code>. Crie ou personalize sua voz no ElevenLabs e use o ID dela. Não envie sua chave aqui no Telegram nem a coloque no GitHub.";
+  return "A voz principal usa <code>ELEVENLABS_API_KEY</code> e <code>ELEVENLABS_VOICE_ID</code>. Como alternativa, configure <code>GEMINI_API_KEY</code> para o Gemini TTS. São Secrets do Supabase, em Edge Functions. Nunca envie chaves no Telegram nem as coloque no GitHub.";
 }
 
 type SendTextOptions = { allowMulti?: boolean; suppressAudio?: boolean; capturedAnswers?: string[] };
@@ -1440,7 +1534,9 @@ async function sendText(chatId: number, userId: string, text: string, options: S
   }
   const voiceControl = parseVoiceControl(originalText);
   if (voiceControl) {
-    const voiceConfigured = Boolean(env("ELEVENLABS_API_KEY"));
+    const elevenLabsConfigured = Boolean(env("ELEVENLABS_API_KEY"));
+    const geminiTtsConfigured = Boolean(env("GEMINI_API_KEY"));
+    const voiceConfigured = elevenLabsConfigured || geminiTtsConfigured;
     if (voiceControl === "enable") editPreferences.voice_reply_enabled = true;
     if (voiceControl === "disable") editPreferences.voice_reply_enabled = false;
     if (voiceControl === "enable" || voiceControl === "disable") await writePreferences(userId, editPreferences);
@@ -1448,14 +1544,14 @@ async function sendText(chatId: number, userId: string, text: string, options: S
     let voiceAnswer: string;
     if (voiceControl === "enable") {
       voiceAnswer = voiceConfigured
-        ? "🔊 <b>Voz ativada!</b> Vou continuar enviando o texto e também o áudio, usando a voz configurada no ElevenLabs."
-        : "🔊 <b>Voz ativada nas preferências.</b> Falta conectar o ElevenLabs para os áudios começarem a chegar.\n\n" + voiceSetupInstructions();
+        ? "🔊 <b>Voz ativada!</b> Vou enviar texto e tentar áudio pelo ElevenLabs; se ele falhar ou acabar a cota, tentarei o Gemini TTS."
+        : "🔊 <b>Voz ativada nas preferências.</b> Configure GEMINI_API_KEY para a alternativa de áudio ou as Secrets do ElevenLabs para a voz principal.\n\n" + voiceSetupInstructions();
     } else if (voiceControl === "disable") {
       voiceAnswer = "📝 <b>Voz desativada.</b> A partir de agora, vou responder somente por texto. Diga <code>/voz on</code> para reativar.";
     } else if (voiceControl === "test") {
       voiceAnswer = voiceConfigured
-        ? "🎙️ Vou enviar uma amostra com a voz personalizada da Íris."
-        : "🎙️ Ainda não consigo gerar a amostra porque o ElevenLabs não está configurado.\n\n" + voiceSetupInstructions();
+        ? "🎙️ Vou testar o áudio da Íris. Se o ElevenLabs estiver sem cota, tentarei a voz alternativa do Gemini."
+        : "🎙️ Ainda não consigo gerar a amostra: configure GEMINI_API_KEY para a voz alternativa ou as Secrets do ElevenLabs para a voz principal.\n\n" + voiceSetupInstructions();
     } else {
       const enabled = editPreferences.voice_reply_enabled !== false;
       voiceAnswer = "🎙️ <b>Configuração de voz da Íris</b>\nStatus: <b>" + (enabled ? "ativada" : "desativada") + "</b>\nElevenLabs: <b>" + (voiceConfigured ? "conectado" : "aguardando configuração") + "</b>\n\n" +
@@ -1474,9 +1570,9 @@ async function sendText(chatId: number, userId: string, text: string, options: S
         : voiceControl === "enable"
           ? "Pronto, a voz da Íris está ativada. Vou responder com texto e áudio."
           : "A voz da Íris está " + (editPreferences.voice_reply_enabled === false ? "desativada." : "ativada.");
-      const sentVoiceSample = await sendElevenLabsAudio(chatId, sampleText);
+      const sentVoiceSample = await sendVoiceAudio(chatId, sampleText);
       if (!sentVoiceSample && voiceControl === "test") {
-        await reply(chatId, "Não consegui gerar ou enviar o áudio. Confira se a Secret ELEVENLABS_API_KEY é válida, se ELEVENLABS_VOICE_ID corresponde a uma voz disponível e se sua conta tem quota para gerar fala.");
+        await reply(chatId, "Não consegui gerar o áudio por nenhum provedor. Confira se GEMINI_API_KEY está configurada e se a cota do Gemini TTS está disponível.");
       }
     }
     return;
@@ -1579,7 +1675,7 @@ async function sendText(chatId: number, userId: string, text: string, options: S
     // Se a voz está ligada, gera no máximo um áudio para a resposta conjunta, não um por tarefa.
     const freshPreferences = await readPreferences(userId);
     if (capturedAnswers.length === aiMultiActions.length && freshPreferences.voice_reply_enabled !== false) {
-      await sendElevenLabsAudio(chatId, capturedAnswers.join("\n\n"));
+      await sendVoiceAudio(chatId, capturedAnswers.join("\n\n"));
     }
     return;
   }
