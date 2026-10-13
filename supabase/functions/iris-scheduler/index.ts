@@ -160,17 +160,27 @@ function nextDate(value: string, frequency: string, monthlyDay?: number | null):
   return targetYear + "-" + String(targetMonth).padStart(2, "0") + "-" + String(Math.min(intendedDay, lastDay)).padStart(2, "0");
 }
 
-function nextMonthlyReminderAt(currentIso: string, day: number): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {timeZone:"America/Fortaleza",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(currentIso));
-  let year = Number(parts.find(p => p.type === "year")?.value);
-  let month = Number(parts.find(p => p.type === "month")?.value) + 1;
-  if (month > 12) { month = 1; year++; }
-  const hour = Number(parts.find(p => p.type === "hour")?.value);
-  const minute = Number(parts.find(p => p.type === "minute")?.value);
+function nextMonthlyReminderAt(scheduledIso: string, day: number, now: Date = new Date()): string {
+  const getParts = (date: Date) => {
+    const parts = new Intl.DateTimeFormat("en-CA", {timeZone:"America/Fortaleza",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(date);
+    const value = (type: string) => Number(parts.find(p => p.type === type)?.value || 0);
+    return { year: value("year"), month: value("month"), day: value("day"), hour: value("hour"), minute: value("minute") };
+  };
+  const scheduled = getParts(new Date(scheduledIso));
+  const current = getParts(now);
+  let year = current.year, month = current.month;
+  const lastCurrentDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const effectiveCurrentDay = Math.min(Math.max(1, day), lastCurrentDay);
+  const currentOccurrenceIsPast = effectiveCurrentDay < current.day ||
+    (effectiveCurrentDay === current.day && (scheduled.hour < current.hour || (scheduled.hour === current.hour && scheduled.minute <= current.minute)));
+  if (currentOccurrenceIsPast) {
+    month++;
+    if (month > 12) { month = 1; year++; }
+  }
   const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const scheduledDay = Math.min(Math.max(1, day), lastDay);
   const date = String(year) + "-" + String(month).padStart(2,"0") + "-" + String(scheduledDay).padStart(2,"0");
-  return new Date(date + "T" + String(hour).padStart(2,"0") + ":" + String(minute).padStart(2,"0") + ":00-03:00").toISOString();
+  return new Date(date + "T" + String(scheduled.hour).padStart(2,"0") + ":" + String(scheduled.minute).padStart(2,"0") + ":00-03:00").toISOString();
 }
 
 async function getChat(userId: string): Promise<number | null> {
@@ -223,7 +233,7 @@ Deno.serve(async (req: Request) => {
 
         const monthly = reminder.recurrence_frequency === "monthly" && Number(reminder.recurrence_day) >= 1 && Number(reminder.recurrence_day) <= 31;
         const reminderUpdate = monthly
-          ? { status: "pending", remind_at: nextMonthlyReminderAt(reminder.remind_at, Number(reminder.recurrence_day)), claimed_at: null }
+          ? { status: "pending", remind_at: nextMonthlyReminderAt(reminder.remind_at, Number(reminder.recurrence_day), now), claimed_at: null }
           : { status: "sent", claimed_at: null };
         const updated = await db("reminders?id=eq." + encodeURIComponent(reminder.id) + "&status=eq.processing", {
           method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(reminderUpdate),
