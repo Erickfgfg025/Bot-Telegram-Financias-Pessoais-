@@ -1475,7 +1475,7 @@ async function sendText(chatId: number, userId: string, text: string, options: S
     if (facts.length) aiConversationReply = "🧠 Lembro destas informações:\n\n" + facts.map((fact, index) => (index + 1) + ". " + fact).join("\n");
   }
 
-  if (!aiConversationReply && !isDocumentResponse && !text.trim().startsWith("/") && !editingAtStart) {
+  if (!aiConversationReply && !isDocumentResponse && !text.trim().startsWith("/") && !editingAtStart && !(options.allowMulti === false && parseEntry(text))) {
     const aiDecision = await askGeminiIntent(userId, editPreferences, originalText);
     if (aiDecision?.kind === "reply") {
       aiReplyParts = aiDecision.parts?.length ? aiDecision.parts : null;
