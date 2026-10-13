@@ -692,8 +692,26 @@ function totals(rows: TransactionRow[]) {
 
 
 
+function rollingSevenDayRange() {
+  const [year, month, day] = localToday().split("-").map(Number);
+  const today = new Date(Date.UTC(year, month - 1, day));
+  const start = new Date(today.getTime() - 6 * 86400000);
+  const end = new Date(today.getTime() + 86400000);
+  const previousStart = new Date(start.getTime() - 7 * 86400000);
+  const iso = (value: Date) => value.toISOString().slice(0, 10);
+  const format = (value: Date) => value.toLocaleDateString("pt-BR", { timeZone: "UTC" });
+  return {
+    start: iso(start) + "T00:00:00-03:00",
+    end: iso(end) + "T00:00:00-03:00",
+    previousStart: iso(previousStart) + "T00:00:00-03:00",
+    previousEnd: iso(start) + "T00:00:00-03:00",
+    startDate: iso(start),
+    label: format(start) + " a " + format(today),
+  };
+}
+
 async function buildWeeklyReport(userId: string): Promise<string> {
-  const range = completedWeekRange();
+  const range = rollingSevenDayRange();
   await backfillCategories(userId, range.start, range.end);
   const [rows, previousRows, categoriesResponse] = await Promise.all([
     getTransactions(userId, { from: range.start, to: range.end, limit: 1000 }),
@@ -712,13 +730,13 @@ async function buildWeeklyReport(userId: string): Promise<string> {
   const topText = top.length ? top.map(([id, amount]) => {
     const category = categoryMap.get(id);
     return "• " + (category?.icon || "📁") + " <b>" + escapeHtml(category?.name || "Categoria") + "</b>: " + money(amount);
-  }).join("\n") : "Ainda não há despesas categorizadas nessa semana.";
-  let comparison = "Sem base suficiente para comparar com a semana anterior.";
+  }).join("\n") : "Ainda não há despesas categorizadas nesse período.";
+  let comparison = "Sem base suficiente para comparar com o período anterior.";
   if (previous.expense > 0) {
     const pct = Math.round((current.expense - previous.expense) / previous.expense * 100);
-    comparison = pct > 0 ? "🔺 Despesas " + pct + "% maiores que na semana anterior." : pct < 0 ? "🔻 Despesas " + Math.abs(pct) + "% menores que na semana anterior." : "➡️ Despesas iguais às da semana anterior.";
-  } else if (current.expense > 0) comparison = "Houve despesas nesta semana; a semana anterior não teve despesas registradas.";
-  return "📊 <b>Relatório semanal · " + escapeHtml(range.label) + "</b>\n\n" +
+    comparison = pct > 0 ? "🔺 Despesas " + pct + "% maiores que no período anterior." : pct < 0 ? "🔻 Despesas " + Math.abs(pct) + "% menores que no período anterior." : "➡️ Despesas iguais às do período anterior.";
+  } else if (current.expense > 0) comparison = "Houve despesas neste período; o período anterior não teve despesas registradas.";
+  return "📊 <b>Relatório dos últimos 7 dias · " + escapeHtml(range.label) + "</b>\n\n" +
     "🟢 Receitas: <b>" + money(current.income) + "</b>\n🔴 Despesas: <b>" + money(current.expense) + "</b>\n" +
     (current.balance >= 0 ? "💚" : "⚠️") + " Resultado: <b>" + money(current.balance) + "</b>\n" +
     "📈 Taxa de economia: " + (rate === null ? "sem receitas registradas" : "<b>" + rate + "%</b>") + "\n" +
