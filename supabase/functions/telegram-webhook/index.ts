@@ -1147,12 +1147,8 @@ function nextNaturalRecurringDate(frequency: "weekly" | "monthly" | "yearly", re
     if (next.getUTCMonth() !== month - 1) next.setUTCDate(0);
     return next.toISOString().slice(0, 10);
   }
-  let targetMonth = month === 12 ? 1 : month + 1;
-  let targetYear = month === 12 ? year + 1 : year;
-  if (requestedDay !== undefined && requestedDay <= day) {
-    targetMonth++;
-    if (targetMonth > 12) { targetMonth = 1; targetYear++; }
-  }
+  const targetMonth = month === 12 ? 1 : month + 1;
+  const targetYear = month === 12 ? year + 1 : year;
   const lastDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
   const scheduledDay = requestedDay === undefined ? day : Math.min(requestedDay, lastDay);
   return String(targetYear) + "-" + String(targetMonth).padStart(2, "0") + "-" + String(Math.min(scheduledDay, lastDay)).padStart(2, "0");
@@ -1297,7 +1293,9 @@ function naturalRecurringCommand(raw: string, normalized: string): string | null
     .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "").slice(0, 180);
   if (!description) description = kind === "receita" ? "Receita recorrente" : "Despesa recorrente";
   const label = frequency === "weekly" ? "semanal" : frequency === "yearly" ? "anual" : "mensal";
-  return "/recorrente " + kind + " " + amount + " " + description + " " + label + " " + nextNaturalRecurringDate(frequency, requestedDay);
+  const nextRunDate = nextNaturalRecurringDate(frequency, requestedDay);
+  const recurrenceDayArgument = frequency === "monthly" ? " " + (requestedDay ?? Number(nextRunDate.slice(8, 10))) : "";
+  return "/recorrente " + kind + " " + amount + " " + description + " " + label + " " + nextRunDate + recurrenceDayArgument;
 }
 
 function naturalBudgetCommand(raw: string, normalized: string): string | null {
@@ -2027,7 +2025,7 @@ async function sendText(chatId: number, userId: string, text: string, options: S
       : "Ainda não há despesas categorizadas neste mês.";
     answer = `📊 <b>Relatório financeiro · ${escapeHtml(range.label)}</b>\n\n🟢 Receitas: <b>${money(income)}</b>\n🔴 Despesas: <b>${money(expenses)}</b>\n${result >= 0 ? "💚" : "⚠️"} Resultado: <b>${money(result)}</b>\n${savings === null ? "📈 Taxa de economia: sem receitas registradas" : `📈 Taxa de economia: <b>${savings}%</b>`}\n🧾 Lançamentos: ${count}\n\n<b>Maiores categorias de despesa</b>\n${topText}\n\n<i>Relatório calculado a partir dos lançamentos registrados.</i>`;
   } else if (/^\/recorrente(?:\s+.*)?$/i.test(text.trim())) {
-    const match = text.trim().match(/^\/recorrente\s+(receita|despesa)\s+(\S+)\s+(.+?)\s+(semanal|mensal|anual)\s+(\d{4}-\d{2}-\d{2})$/i);
+    const match = text.trim().match(/^\/recorrente\s+(receita|despesa)\s+(\S+)\s+(.+?)\s+(semanal|mensal|anual)\s+(\d{4}-\d{2}-\d{2})(?:\s+(\d{1,2}))?$/i);
     if (!match) {
       answer = "🔁 <b>Criar lançamento recorrente</b>\nDiga, por exemplo: <b>Todo mês pago 1.200 de aluguel</b> ou <b>Toda semana gasto 75 com feira</b>. Informe valor, descrição e frequência.";
     } else {
@@ -2036,14 +2034,16 @@ async function sendText(chatId: number, userId: string, text: string, options: S
       const description = match[3].trim().slice(0, 180);
       const frequency = ({ semanal: "weekly", mensal: "monthly", anual: "yearly" } as Record<string, string>)[match[4].toLocaleLowerCase("pt-BR")];
       const date = match[5];
-      if (!amount || !description || !validIsoDate(date) || date < localToday()) {
+      const recurrenceDayArg = match[6] ? Number(match[6]) : null;
+      if (!amount || !description || !validIsoDate(date) || date < localToday() ||
+          (frequency === "monthly" && recurrenceDayArg !== null && (!Number.isInteger(recurrenceDayArg) || recurrenceDayArg < 1 || recurrenceDayArg > 31))) {
         answer = "Não consegui validar o valor ou a data. Use um valor positivo e uma próxima data igual ou posterior a hoje, no formato AAAA-MM-DD.";
       } else {
         const category = categoryGuess(description, kind);
         const categoryId = await getOrCreateCategory(userId, category, kind);
         const created = await db("recurring_rules", {
           method: "POST", headers: { Prefer: "return=representation" },
-          body: JSON.stringify({ user_id: userId, description, kind, amount, frequency, next_run_at: date, recurrence_day: frequency === "monthly" ? Number(date.slice(8, 10)) : null, category_id: categoryId, active: true }),
+          body: JSON.stringify({ user_id: userId, description, kind, amount, frequency, next_run_at: date, recurrence_day: frequency === "monthly" ? (recurrenceDayArg ?? Number(date.slice(8, 10))) : null, category_id: categoryId, active: true }),
         });
         if (!created.ok) throw new Error("Could not create recurring rule");
         answer = "🔁 <b>Lançamento recorrente criado</b>\n" + (kind === "income" ? "Receita" : "Despesa") + ": <b>" + money(amount) + "</b>\nDescrição: " + escapeHtml(description) + "\nFrequência: " + match[4].toLocaleLowerCase("pt-BR") + "\nPróxima execução: " + new Date(date + "T12:00:00Z").toLocaleDateString("pt-BR", { timeZone: "UTC" }) + "\n\nA recorrência será registrada automaticamente quando o agendador estiver ativo.";
