@@ -1161,7 +1161,7 @@ function nextNaturalRecurringDate(frequency: "weekly" | "monthly" | "yearly", re
 function naturalMonthlyReminderCommand(raw: string, normalized: string): string | null {
   const reminderIntent = /\b(?:lembrete|me lembre|me lembra|lembre-?me|lembra-?me|me avise|me avisa|avise-?me|avisa-?me|quero ser lembrad[oa])\b/.test(normalized)
     || /\b(?:crie|criar|cria|adicione|adicionar|agende|agendar)\s+(?:um\s+)?lembrete\b/.test(normalized);
-  const monthlyCue = /\b(?:todo|toda)\s+(?:o\s+)?mes\b|\bmensalmente\b|\btodo\s+dia\s+\d{1,2}\s+de\s+cada\s+mes\b|\bcada\s+mes\b/.test(normalized);
+  const monthlyCue = /\b(?:todo|toda)\s+(?:o\s+)?mes\b|\bmensal(?:mente)?\b|\btodo\s+dia\s+\d{1,2}\s+de\s+cada\s+mes\b|\bcada\s+mes\b/.test(normalized);
   if (!reminderIntent || !monthlyCue) return null;
   const dayMatch = normalized.match(/\bdia\s+(\d{1,2})\b/);
   if (!dayMatch || Number(dayMatch[1]) < 1 || Number(dayMatch[1]) > 31) return "/lembremensal";
@@ -1186,7 +1186,7 @@ function naturalMonthlyReminderCommand(raw: string, normalized: string): string 
     .replace(/^\s*(?:que eu tenho que|que eu preciso|que tenho que|que preciso|que devo|para eu|pra eu|para|pra|de|que)\s+/i, "")
     .replace(/\b(?:todo|toda)\s+(?:o\s+)?m[eê]s\b/ig, " ")
     .replace(/\btodo\s+dia\s+\d{1,2}\s+de\s+cada\s+m[eê]s\b/ig, " ")
-    .replace(/\bmensalmente\b/ig, " ")
+    .replace(/\bmensal(?:mente)?\b/ig, " ")
     .replace(/\bdia\s+\d{1,2}\s*(?:de\s+cada\s+m[eê]s)?\b/ig, " ")
     .replace(/(?:às|as)\s*\d{1,2}(?:(?::|h)\d{2})?\s*(?:h(?:oras?)?)?/ig, " ")
     .replace(/\b\d{1,2}h(?:\d{2})?\b/ig, " ")
@@ -1291,7 +1291,7 @@ function naturalRecurringCommand(raw: string, normalized: string): string | null
     .replace(/(?:às|as)\s*\d{1,2}(?:(?::|h)\d{2})?\s*(?:h(?:oras?)?)?/ig, " ")
     .replace(/\b\d{1,2}h(?:\d{2})?\b/ig, " ")
     .replace(/\b(?:todo|toda|todos|todas)\s+(?:a\s+)?(?:semana|m[eê]s|mes|ano)\b/ig, " ")
-    .replace(/\b(?:todo\s+dia\s+\d{1,2}\s+de\s+cada\s+m[eê]s|a cada|semanalmente|mensalmente|anualmente|semanal|mensal|anual|recorrente|recorrência|recorrencia)\b/ig, " ")
+    .replace(/\b(?:todo\s+dia\s+\d{1,2}\s+de\s+cada\s+m[eê]s|a cada|semanalmente|mensalmente|mensal|anualmente|semanal|anual|recorrente|recorrência|recorrencia)\b/ig, " ")
     .replace(/\b(?:por favor|quero|preciso|crie|criar|registre|registrar|lance|lançar|lancar|programe|programar|automaticamente|receita|despesa|recebo|receber|ganho|ganhar|entrou|caiu|cai|vendi|vender|faturei|pago|pagar|pagarei|paguei|pague|gasto|gastar|desconto|cobrado|cobrada)\b/ig, " ")
     .replace(/\b(?:reais?|de|do|da|para|por|no|na|em|com|todo|toda|meu|minha|um|uma|que)\b/ig, " ")
     .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "").slice(0, 180);
