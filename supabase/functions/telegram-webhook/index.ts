@@ -369,7 +369,7 @@ function findAmountMatch(text: string): RegExpMatchArray | null {
 
 function parseEntry(text: string): { kind: "income" | "expense"; amount: number; description: string } | null {
   const lower = normalizeText(text);
-  const kind = /\b(recebi|ganhei|salário|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou)\b/.test(lower) ? "income" :
+  const kind = /\b(recebi|ganhei|salário|salario|renda|receita|entrada|rendimento|vendi|entrou|caiu|faturei|me pagaram|me pagou)\b/.test(lower) ? "income" :
     /\b(gastei|paguei|comprei|despesa|conta de|debitei|passei no cart(?:a|ã)o)\b/.test(lower) ? "expense" : null;
   if (!kind) return null;
   const match = findAmountMatch(text);
@@ -377,7 +377,7 @@ function parseEntry(text: string): { kind: "income" | "expense"; amount: number;
   const amount = parseMoney(match[0].replace(/^R\$\s*/i, ""));
   if (!amount) return null;
   const description = text.replace(match[0], " ")
-    .replace(/\b(recebi|ganhei|salário|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou|gastei|paguei|comprei|despesa|conta de|debitei|passei no cart(?:a|ã)o)\b/ig, " ")
+    .replace(/\b(recebi|ganhei|salário|salario|renda|receita|entrada|rendimento|tenho|tem|vendi|entrou|caiu|faturei|me pagaram|me pagou|gastei|paguei|comprei|despesa|conta de|debitei|passei no cart(?:a|ã)o)\b/ig, " ")
     .replace(/\b(?:reais?|real|foi|deu|hoje|ontem|na|no|um|uma|de|do|da|por|conta)\b/ig, " ")
     .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "") ||
     (kind === "income" ? "Receita" : "Despesa");
@@ -1659,7 +1659,9 @@ async function sendText(chatId: number, userId: string, text: string, options: S
     if (facts.length) aiConversationReply = "🧠 Lembro destas informações:\n\n" + facts.map((fact, index) => (index + 1) + ". " + fact).join("\n");
   }
 
-  if (!aiConversationReply && !isDocumentResponse && !text.trim().startsWith("/") && !editingAtStart && !(options.allowMulti === false && parseEntry(text))) {
+  if (!aiConversationReply && !isDocumentResponse && !text.trim().startsWith("/") && !editingAtStart &&
+      !(parseEntry(text) && /\b(?:receita|entrada|rendimento)\b/i.test(normalizeText(text))) &&
+      !(options.allowMulti === false && parseEntry(text))) {
     const aiDecision = await askGeminiIntent(userId, editPreferences, originalText);
     if (aiDecision?.kind === "reply") {
       aiReplyParts = aiDecision.parts?.length ? aiDecision.parts : null;
