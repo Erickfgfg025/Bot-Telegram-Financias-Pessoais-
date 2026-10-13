@@ -159,6 +159,19 @@ function nextDate(value: string, frequency: string): string {
   return targetYear + "-" + String(targetMonth).padStart(2, "0") + "-" + String(Math.min(day, lastDay)).padStart(2, "0");
 }
 
+function nextMonthlyReminderAt(currentIso: string, day: number): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {timeZone:"America/Fortaleza",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(currentIso));
+  let year = Number(parts.find(p => p.type === "year")?.value);
+  let month = Number(parts.find(p => p.type === "month")?.value) + 1;
+  if (month > 12) { month = 1; year++; }
+  const hour = Number(parts.find(p => p.type === "hour")?.value);
+  const minute = Number(parts.find(p => p.type === "minute")?.value);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const scheduledDay = Math.min(Math.max(1, day), lastDay);
+  const date = String(year) + "-" + String(month).padStart(2,"0") + "-" + String(scheduledDay).padStart(2,"0");
+  return new Date(date + "T" + String(hour).padStart(2,"0") + ":" + String(minute).padStart(2,"0") + ":00-03:00").toISOString();
+}
+
 async function getChat(userId: string): Promise<number | null> {
   const response = await db("iris_users?id=eq." + encodeURIComponent(userId) + "&select=telegram_chat_id&limit=1");
   if (!response.ok) throw new Error("Could not read Telegram chat");
@@ -176,7 +189,7 @@ Deno.serve(async (req: Request) => {
 
     const now = new Date();
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Fortaleza", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
-    const reminderResponse = await db("reminders?status=eq.pending&remind_at=lte." + encodeURIComponent(now.toISOString()) + "&select=id,user_id,title,body,remind_at&order=remind_at.asc&limit=50");
+    const reminderResponse = await db("reminders?status=eq.pending&remind_at=lte." + encodeURIComponent(now.toISOString()) + "&select=id,user_id,title,body,remind_at,recurrence_frequency,recurrence_day&order=remind_at.asc&limit=50");
     if (!reminderResponse.ok) throw new Error("Could not read due reminders");
     const reminders = await reminderResponse.json();
     let remindersSent = 0, remindersFailed = 0;
@@ -185,7 +198,10 @@ Deno.serve(async (req: Request) => {
         const chatId = await getChat(reminder.user_id);
         if (!chatId) throw new Error("No Telegram chat is linked");
         await telegram("sendMessage", { chat_id: chatId, text: "⏰ Lembrete da Íris\n\n" + reminder.title + (reminder.body ? "\n" + reminder.body : "") });
-        const updated = await db("reminders?id=eq." + encodeURIComponent(reminder.id) + "&status=eq.pending", { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "sent" }) });
+        const reminderUpdate = reminder.recurrence_frequency === "monthly" && Number(reminder.recurrence_day) >= 1 && Number(reminder.recurrence_day) <= 31
+          ? { remind_at: nextMonthlyReminderAt(reminder.remind_at, Number(reminder.recurrence_day)) }
+          : { status: "sent" };
+        const updated = await db("reminders?id=eq." + encodeURIComponent(reminder.id) + "&status=eq.pending", { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(reminderUpdate) });
         if (!updated.ok) throw new Error("Could not mark reminder sent");
         remindersSent++;
       } catch (error) { console.error("Reminder delivery failed", reminder.id, error instanceof Error ? error.message : "unknown error"); remindersFailed++; }
