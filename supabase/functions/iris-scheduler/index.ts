@@ -190,22 +190,64 @@ Deno.serve(async (req: Request) => {
 
     const now = new Date();
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Fortaleza", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+    // Recover claims stranded by a crashed invocation after a 15-minute lease.
+    const staleClaimCutoff = new Date(now.getTime() - 15 * 60_000).toISOString();
+    const recoveredClaims = await db("reminders?status=eq.processing&claimed_at=lt." + encodeURIComponent(staleClaimCutoff), {
+      method: "PATCH", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ status: "pending", claimed_at: null }),
+    });
+    if (!recoveredClaims.ok) throw new Error("Could not recover stale reminder claims");
+
     const reminderResponse = await db("reminders?status=eq.pending&remind_at=lte." + encodeURIComponent(now.toISOString()) + "&select=id,user_id,title,body,remind_at,recurrence_frequency,recurrence_day&order=remind_at.asc&limit=50");
     if (!reminderResponse.ok) throw new Error("Could not read due reminders");
     const reminders = await reminderResponse.json();
     let remindersSent = 0, remindersFailed = 0;
     for (const reminder of reminders) {
+      let claimed = false;
+      let delivered = false;
       try {
+        // Conditional update is the atomic claim: only one overlapping invocation wins.
+        const claimResponse = await db("reminders?id=eq." + encodeURIComponent(reminder.id) + "&status=eq.pending", {
+          method: "PATCH", headers: { Prefer: "return=representation" },
+          body: JSON.stringify({ status: "processing", claimed_at: now.toISOString() }),
+        });
+        if (!claimResponse.ok) throw new Error("Could not claim reminder");
+        const claimRows = await claimResponse.json();
+        if (!Array.isArray(claimRows) || claimRows.length === 0) continue;
+        claimed = true;
+
         const chatId = await getChat(reminder.user_id);
         if (!chatId) throw new Error("No Telegram chat is linked");
         await telegram("sendMessage", { chat_id: chatId, text: "⏰ Lembrete da Íris\n\n" + reminder.title + (reminder.body ? "\n" + reminder.body : "") });
-        const reminderUpdate = reminder.recurrence_frequency === "monthly" && Number(reminder.recurrence_day) >= 1 && Number(reminder.recurrence_day) <= 31
-          ? { remind_at: nextMonthlyReminderAt(reminder.remind_at, Number(reminder.recurrence_day)) }
-          : { status: "sent" };
-        const updated = await db("reminders?id=eq." + encodeURIComponent(reminder.id) + "&status=eq.pending", { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(reminderUpdate) });
-        if (!updated.ok) throw new Error("Could not mark reminder sent");
+        delivered = true;
+
+        const monthly = reminder.recurrence_frequency === "monthly" && Number(reminder.recurrence_day) >= 1 && Number(reminder.recurrence_day) <= 31;
+        const reminderUpdate = monthly
+          ? { status: "pending", remind_at: nextMonthlyReminderAt(reminder.remind_at, Number(reminder.recurrence_day)), claimed_at: null }
+          : { status: "sent", claimed_at: null };
+        const updated = await db("reminders?id=eq." + encodeURIComponent(reminder.id) + "&status=eq.processing", {
+          method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(reminderUpdate),
+        });
+        if (!updated.ok) throw new Error("Could not finalize reminder delivery");
+        const updatedRows = await updated.json();
+        if (!Array.isArray(updatedRows) || updatedRows.length === 0) throw new Error("Reminder state changed before finalization");
         remindersSent++;
-      } catch (error) { console.error("Reminder delivery failed", reminder.id, error instanceof Error ? error.message : "unknown error"); remindersFailed++; }
+      } catch (error) {
+        console.error("Reminder delivery failed", reminder.id, error instanceof Error ? error.message : "unknown error");
+        // A failed Telegram delivery can be retried immediately. If Telegram accepted
+        // the message but finalization failed, keep the lease until stale-claim recovery
+        // to reduce the chance of sending a duplicate on the next five-minute run.
+        if (claimed && !delivered) {
+          try {
+            const released = await db("reminders?id=eq." + encodeURIComponent(reminder.id) + "&status=eq.processing", {
+              method: "PATCH", headers: { Prefer: "return=minimal" },
+              body: JSON.stringify({ status: "pending", claimed_at: null }),
+            });
+            if (!released.ok) console.error("Could not release failed reminder claim", reminder.id);
+          } catch { console.error("Could not release failed reminder claim", reminder.id); }
+        }
+        remindersFailed++;
+      }
     }
     const rulesResponse = await db("recurring_rules?active=eq.true&next_run_at=lte." + today + "&select=id,user_id,description,kind,amount,frequency,next_run_at,recurrence_day,category_id&order=next_run_at.asc&limit=50");
     if (!rulesResponse.ok) throw new Error("Could not read due recurring rules");
