@@ -624,7 +624,7 @@ async function listActiveGoals(userId: string): Promise<any[]> {
 
 type GeminiPart = Record<string, unknown>;
 type FinancialEntry = { kind: "income" | "expense"; amount: number; description: string };
-type GeminiDecision = { kind: "command" | "reply"; value: string } | { kind: "mixed"; value: string; reply: string } | { kind: "batch"; transactions: FinancialEntry[]; reply: string };
+type GeminiDecision = { kind: "command"; value: string } | { kind: "reply"; value: string; parts?: string[] } | { kind: "mixed"; value: string; reply: string } | { kind: "batch"; transactions: FinancialEntry[]; reply: string } | { kind: "multi"; actions: string[] };
 
 async function callGemini(parts: GeminiPart[], options: { responseJson?: boolean; system?: string; contents?: Array<{ role: string; parts: GeminiPart[] }>; responseSchema?: Record<string, unknown>; maxOutputTokens?: number; timeoutMs?: number } = {}): Promise<string | null> {
   const apiKey = env("GEMINI_API_KEY");
@@ -644,13 +644,15 @@ async function callGemini(parts: GeminiPart[], options: { responseJson?: boolean
       responseSchema: options.responseSchema ?? {
         type: "OBJECT",
         properties: {
-          kind: { type: "STRING", enum: ["command", "reply", "mixed", "batch"] },
+          kind: { type: "STRING", enum: ["command", "reply", "mixed", "batch", "multi"] },
           value: { type: "STRING" },
           reply: { type: "STRING" },
+          reply_parts: { type: "ARRAY", items: { type: "STRING" } },
+          actions: { type: "ARRAY", items: { type: "STRING" } },
           transactions: { type: "ARRAY", items: { type: "OBJECT", properties: { kind: { type: "STRING", enum: ["income", "expense"] }, amount: { type: "NUMBER" }, description: { type: "STRING" } }, required: ["kind", "amount", "description"] } },
           memory_updates: { type: "ARRAY", items: { type: "STRING" } },
         },
-        required: ["kind", "value", "reply", "transactions", "memory_updates"],
+        required: ["kind", "value", "reply", "reply_parts", "actions", "transactions", "memory_updates"],
       },
     };
   }
@@ -991,9 +993,9 @@ async function askGeminiIntent(userId: string, preferences: Record<string, unkno
     "MEMÓRIA DE LONGO PRAZO: use os fatos persistentes abaixo e o histórico recente para lembrar preferências, projetos, objetivos e informações que o usuário contou. Nunca invente lembranças. Se não encontrar a resposta, diga que não consegue confirmar. Ao fim de cada resposta, preencha memory_updates com até 3 fatos duradouros novos que o usuário tenha afirmado explicitamente ou pedido para guardar. Não salve senhas, tokens, chaves, dados bancários completos, informações altamente sensíveis, nem valores de transações financeiras, que já ficam no banco financeiro. Não transforme suposições em fatos. Se não houver nada útil, retorne array vazio.",
     "MEMÓRIA RELEVANTE PARA A MENSAGEM ATUAL: " + JSON.stringify(selectRelevantMemoryFacts(preferences.memory_facts, currentMessage, 12)),
     "Para perguntas sobre dados reais do usuário, use apenas comandos permitidos que façam a aplicação consultar o banco. Se não houver comando adequado, explique a limitação e pergunte o que a pessoa quer fazer.",
-    "Responda sempre como JSON válido com cinco propriedades: kind, value, reply, transactions e memory_updates. kind deve ser command, reply, mixed ou batch. Para command, reply ou mixed, preencha transactions com array vazio. Para batch, deixe value vazio. memory_updates é uma lista de fatos duradouros novos, curta e sem duplicatas.",
+    "Responda sempre como JSON válido com sete propriedades: kind, value, reply, reply_parts, actions, transactions e memory_updates. kind pode ser command, reply, mixed, batch ou multi. Sempre inclua todas as propriedades, usando arrays vazios quando não forem necessários. reply_parts divide uma resposta conversacional em 1 a 3 mensagens naturais de Telegram; value contém o mesmo conteúdo unido. memory_updates é uma lista de fatos duradouros novos, curta e sem duplicatas.",
     "Use kind=command quando o pedido for uma operação existente; value deve ser o comando permitido ou uma frase de lançamento financeiro inequívoca.",
-    "IMPORTANTE: se houver uma pergunta e exatamente um lançamento explícito, use kind=mixed; value contém só o lançamento e reply só a resposta. Se houver dois ou mais lançamentos, use kind=batch e transactions deve ter um objeto por lançamento, com kind income/expense, amount positivo numérico e description curta contendo apenas o motivo do lançamento. Nunca junte lançamentos nem inclua a pergunta nas descrições. Para perguntas sobre saldo ou totais reais, não invente valores; deixe reply vazio para a aplicação calcular após registrar. Exemplo: \"Quanto gastei este mês? Hoje paguei R$ 35 no almoço e recebi R$ 80 por um serviço\" => kind=batch, transactions=[{kind:expense,amount:35,description:almoço},{kind:income,amount:80,description:serviço}], reply vazio.",
+    "IMPORTANTE: se houver uma pergunta e exatamente um lançamento explícito, use kind=mixed; value contém só o lançamento e reply só a resposta. Se houver dois ou mais lançamentos financeiros e a tarefa for registrar essas movimentações, use kind=batch e transactions deve ter um objeto por lançamento, com kind income/expense, amount positivo numérico e description curta contendo apenas o motivo. Nunca junte lançamentos nem inclua perguntas nas descrições. Para perguntas sobre saldo ou totais reais, não invente valores; deixe reply vazio para a aplicação calcular após registrar. Use kind=multi quando houver 2 a 5 tarefas independentes de tipos diferentes (por exemplo, registrar algo, consultar saldo, ver metas e criar um lembrete). Nesse caso, actions deve conter uma frase curta e autônoma por tarefa, na ordem pedida, sem inventar tarefas, valores, datas ou descrições; value deve ser vazio. Para conversa livre, kind=reply e reply_parts terá 1 a 3 segmentos em ordem, usando 2 ou 3 apenas quando isso tornar a resposta mais natural. Não divida uma resposta curta só para preencher a lista.",
     "Comandos permitidos: /start, /saldo, /resumo, /relatorio, /relatorio semanal [on|off], /ultimas, /categorias, /orcamentos, /meta [valor] [nome] [AAAA-MM-DD], /metas, /guardar [número] [valor], /recorrentes, /lembretes, /editar [número], /excluir [número], /confirmar, /cancelar, /cancelarlembrete [número], /pausarrecorrente [número], /lembrete [AAAA-MM-DD HH:MM título], /orcamento [categoria] [valor], /recorrente [receita|despesa] [valor] [descrição] [semanal|mensal|anual] [AAAA-MM-DD].",
     "Se faltar informação para uma operação, use kind=reply e faça uma pergunta curta. Nunca invente valores, datas, categorias ou itens.",
     "CONTINUAÇÃO E CORREÇÕES: diferencie um novo lançamento de uma correção de algo já dito. Se o usuário disser algo como não foi 50, foi 80 ou na verdade era 35, não registre isso como uma nova receita/despesa; esclareça qual lançamento deve ser corrigido ou use somente o fluxo de edição já disponível. Se a intenção ou o valor continuar ambíguo mesmo após consultar o contexto, pergunte. Não afirme que alterou ou salvou algo antes de a aplicação confirmar.",
@@ -1027,10 +1029,19 @@ async function askGeminiIntent(userId: string, preferences: Record<string, unkno
       preferences.memory_facts = merged;
       if (changed) await writePreferences(userId, preferences);
     }
-    if (!["command", "reply", "mixed", "batch"].includes(parsed?.kind) || typeof parsed?.value !== "string") return null;
+    if (!["command", "reply", "mixed", "batch", "multi"].includes(parsed?.kind) || typeof parsed?.value !== "string") return null;
     const value = parsed.value.trim().slice(0, 3500);
-    if (!value && parsed.kind !== "batch") return null;
-    if (parsed.kind === "reply") return { kind: "reply", value };
+    const parsedReplyParts = Array.isArray(parsed.reply_parts)
+      ? parsed.reply_parts.filter((part: unknown): part is string => typeof part === "string").map((part: string) => part.trim()).filter(Boolean).slice(0, 3).map((part: string) => part.slice(0, 1400))
+      : [];
+    if (!value && parsed.kind !== "batch" && parsed.kind !== "multi" && !(parsed.kind === "reply" && parsedReplyParts.length)) return null;
+    if (parsed.kind === "reply") return { kind: "reply", value: parsedReplyParts.length ? parsedReplyParts.join("\n\n") : value, parts: parsedReplyParts.length ? parsedReplyParts : undefined };
+    if (parsed.kind === "multi") {
+      if (!Array.isArray(parsed.actions) || parsed.actions.length < 2 || parsed.actions.length > 5) return null;
+      const actions = parsed.actions.filter((action: unknown): action is string => typeof action === "string").map((action: string) => action.trim());
+      if (actions.length !== parsed.actions.length || actions.some((action: string) => !action || action.length > 500)) return null;
+      return { kind: "multi", actions };
+    }
     if (parsed.kind === "mixed") {
       const mixedReply = typeof parsed.reply === "string" ? parsed.reply.trim().slice(0, 2500) : "";
       if (!mixedReply || !parseEntry(value)) return null;
@@ -1061,7 +1072,7 @@ async function askGeminiIntent(userId: string, preferences: Record<string, unkno
  * Conversa livre, separada do classificador de ações financeiras.
  * Esta função só gera texto: nunca devolve comandos nem executa operações.
  */
-async function askGeminiConversation(userId: string, preferences: Record<string, unknown>, currentMessage: string): Promise<string | null> {
+async function askGeminiConversation(userId: string, preferences: Record<string, unknown>, currentMessage: string): Promise<string[] | null> {
   if (!env("GEMINI_API_KEY")) return null;
   try {
     const response = await db("conversation_messages?user_id=eq." + encodeURIComponent(userId) + "&select=role,content,created_at&order=created_at.desc&limit=14");
@@ -1076,6 +1087,8 @@ async function askGeminiConversation(userId: string, preferences: Record<string,
     const financialRecall = await buildFinancialRecallContext(userId, currentMessage);
     const system = [
       "Você é a Íris, assistente pessoal brasileira que conversa naturalmente pelo Telegram. Responda à mensagem atual com clareza, contexto e português brasileiro informal, sem parecer um formulário ou um robô.",
+      "Retorne JSON válido com a propriedade messages, um array de 1 a 3 mensagens de texto para enviar em sequência no Telegram.",
+      "Use 2 ou 3 mensagens quando uma ideia seguida de complemento, pergunta ou comentário curto soar mais natural. Uma resposta simples deve ficar em uma única mensagem. Cada mensagem deve fazer sentido na sequência, ser breve e evitar repetir o que a mensagem anterior acabou de dizer.",
       "Esta é uma conversa livre, não um executor de comandos. Não emita comandos de bot, não tente criar, editar ou excluir dados e nunca diga que registrou ou alterou algo. Operações financeiras devem continuar pelo fluxo financeiro separado.",
       "CONSULTA FINANCEIRA: os registros financeiros reais recuperados abaixo são a fonte da verdade. Consulte-os para responder perguntas sobre despesas, receitas, valores, datas e descrições. Nunca diga que o usuário precisa usar outra função quando os dados já foram fornecidos aqui. Se não houver correspondência clara, diga isso e pergunte por um detalhe. Nunca invente valores nem fale como se você fosse o usuário.",
       "EXCLUSÃO E ALTERAÇÃO: esta função de conversa não apaga nem altera dados diretamente. Se a pessoa pedir exclusão, a aplicação deve encaminhar o pedido ao fluxo financeiro de seleção e confirmação. Nunca afirme que excluiu algo sem confirmação do sistema.",
@@ -1084,9 +1097,17 @@ async function askGeminiConversation(userId: string, preferences: Record<string,
       "Memória persistente relevante (fatos explícitos do usuário): " + JSON.stringify(selectRelevantMemoryFacts(preferences.memory_facts, currentMessage, 8)),
       financialRecall || "Nenhum contexto financeiro específico foi recuperado para esta mensagem. Não invente dados financeiros.",
     ].join("\n");
-    const output = await callGemini([], { system, contents, maxOutputTokens: 450, timeoutMs: 15000 });
-    const clean = (output || "").replace(/^["'“”]+|["'“”]+$/g, "").trim();
-    return clean ? clean.slice(0, 2500) : null;
+    const output = await callGemini([], {
+      responseJson: true,
+      responseSchema: { type: "OBJECT", properties: { messages: { type: "ARRAY", items: { type: "STRING" } } }, required: ["messages"] },
+      system, contents, maxOutputTokens: 500, timeoutMs: 15000,
+    });
+    if (!output) return null;
+    const parsed = JSON.parse(output);
+    if (!Array.isArray(parsed?.messages)) return null;
+    const messages = parsed.messages.filter((part: unknown): part is string => typeof part === "string")
+      .map((part: string) => part.trim()).filter(Boolean).slice(0, 3).map((part: string) => part.slice(0, 1400));
+    return messages.length ? messages : null;
   } catch (error) {
     console.error("Gemini conversation fallback failed", error instanceof Error ? error.message : "unknown error");
     return null;
@@ -1331,7 +1352,8 @@ function voiceSetupInstructions(): string {
   return "Para ativar a voz, configure estas Secrets no Supabase, em Edge Functions: <code>ELEVENLABS_API_KEY</code> e <code>ELEVENLABS_VOICE_ID</code>. Crie ou personalize sua voz no ElevenLabs e use o ID dela. Não envie sua chave aqui no Telegram nem a coloque no GitHub.";
 }
 
-async function sendText(chatId: number, userId: string, text: string) {
+type SendTextOptions = { allowMulti?: boolean; suppressAudio?: boolean; capturedAnswers?: string[] };
+async function sendText(chatId: number, userId: string, text: string, options: SendTextOptions = {}) {
   const savedUser = await db("conversation_messages", {
     method: "POST", headers: { Prefer: "return=minimal" },
     body: JSON.stringify({ user_id: userId, role: "user", content: text }),
@@ -1376,7 +1398,7 @@ async function sendText(chatId: number, userId: string, text: string) {
     });
     if (!savedVoiceAnswer.ok) throw new Error("Could not save voice configuration response");
     await reply(chatId, voiceAnswer);
-    if (voiceConfigured && (voiceControl === "test" || (voiceControl === "enable" && editPreferences.voice_reply_enabled !== false) || (voiceControl === "status" && editPreferences.voice_reply_enabled !== false))) {
+    if (!options.suppressAudio && voiceConfigured && (voiceControl === "test" || (voiceControl === "enable" && editPreferences.voice_reply_enabled !== false) || (voiceControl === "status" && editPreferences.voice_reply_enabled !== false))) {
       const sampleText = voiceControl === "test"
         ? "Olá! Eu sou a Íris. Esta é a voz que você personalizou no ElevenLabs."
         : voiceControl === "enable"
@@ -1410,6 +1432,8 @@ async function sendText(chatId: number, userId: string, text: string) {
   const pendingAtStartTime = pendingAtStart?.created_at ? Date.parse(pendingAtStart.created_at) : 0;
   const editingAtStart = Boolean(pendingAtStart?.id && pendingAtStartTime && Date.now() - pendingAtStartTime <= 10 * 60 * 1000);
   let aiConversationReply: string | null = null;
+  let aiReplyParts: string[] | null = null;
+  let aiMultiActions: string[] | null = null;
   let aiSupplementaryReply: string | null = null;
   let aiBatchTransactions: FinancialEntry[] | null = null;
 
@@ -1453,9 +1477,17 @@ async function sendText(chatId: number, userId: string, text: string) {
 
   if (!aiConversationReply && !isDocumentResponse && !text.trim().startsWith("/") && !editingAtStart) {
     const aiDecision = await askGeminiIntent(userId, editPreferences, originalText);
-    if (aiDecision?.kind === "reply") aiConversationReply = aiDecision.value;
-    else if (aiDecision?.kind === "command") text = aiDecision.value;
-    else if (aiDecision?.kind === "mixed") {
+    if (aiDecision?.kind === "reply") {
+      aiReplyParts = aiDecision.parts?.length ? aiDecision.parts : null;
+      aiConversationReply = aiReplyParts?.length ? aiReplyParts.join("\n\n") : aiDecision.value;
+    } else if (aiDecision?.kind === "command") text = aiDecision.value;
+    else if (aiDecision?.kind === "multi") {
+      if (options.allowMulti !== false) aiMultiActions = aiDecision.actions;
+      else {
+        const conversationParts = await askGeminiConversation(userId, editPreferences, originalText);
+        if (conversationParts) { aiReplyParts = conversationParts; aiConversationReply = conversationParts.join("\n\n"); }
+      }
+    } else if (aiDecision?.kind === "mixed") {
       text = aiDecision.value;
       aiSupplementaryReply = aiDecision.reply;
     } else if (aiDecision?.kind === "batch") {
@@ -1465,8 +1497,21 @@ async function sendText(chatId: number, userId: string, text: string) {
     } else if (!aiDecision && !parseEntry(text) && !isAllowedGeminiCommand(text) && !text.trim().startsWith("/")) {
       // Se a classificação de intenção falhar, tente uma resposta conversacional isolada.
       // A conversa livre não pode disparar nem simular operações financeiras.
-      aiConversationReply = await askGeminiConversation(userId, editPreferences, originalText);
+      const conversationParts = await askGeminiConversation(userId, editPreferences, originalText);
+      if (conversationParts) { aiReplyParts = conversationParts; aiConversationReply = conversationParts.join("\n\n"); }
     }
+  }
+  if (aiMultiActions?.length) {
+    const capturedAnswers: string[] = [];
+    for (const action of aiMultiActions) {
+      await sendText(chatId, userId, action, { allowMulti: false, suppressAudio: true, capturedAnswers });
+    }
+    // Se a voz está ligada, gera no máximo um áudio para a resposta conjunta, não um por tarefa.
+    const freshPreferences = await readPreferences(userId);
+    if (capturedAnswers.length === aiMultiActions.length && freshPreferences.voice_reply_enabled !== false) {
+      await sendElevenLabsAudio(chatId, capturedAnswers.join("\n\n"));
+    }
+    return;
   }
   const entry = parseEntry(text);
   const pendingEdit = editPreferences.pending_transaction_edit as { id?: string; created_at?: string } | undefined;
@@ -2058,17 +2103,21 @@ async function sendText(chatId: number, userId: string, text: string) {
   if (aiSupplementaryReply && entry && !aiConversationReply) {
     answer = `💬 <b>Resposta</b>\n${escapeHtml(aiSupplementaryReply)}\n\n${answer}`;
   }
+  if (options.capturedAnswers) options.capturedAnswers.push(answer);
+  const outgoingMessages = aiConversationReply && aiReplyParts && aiReplyParts.length > 1
+    ? aiReplyParts.map((part: string) => escapeHtml(part.trim())).filter(Boolean).slice(0, 3)
+    : [answer];
   const [savedAssistant] = await Promise.all([
     db("conversation_messages", {
       method: "POST", headers: { Prefer: "return=minimal" },
       body: JSON.stringify({ user_id: userId, role: "assistant", content: answer.replace(/<[^>]*>/g, "") }),
     }),
-    reply(chatId, answer),
+    (async () => { for (const messagePart of outgoingMessages) await reply(chatId, messagePart); })(),
   ]);
   if (!savedAssistant.ok) throw new Error("Could not save assistant response");
   // O /start e os comandos de ajuda ficam somente em texto para economizar créditos da ElevenLabs.
   const isStartOrHelp = /^\/(?:start|ajuda|help)\b/i.test(originalText.trim());
-  if (!isStartOrHelp) {
+  if (!options.suppressAudio && !isStartOrHelp) {
     await sendOptionalAudioForCurrentReply(chatId, userId, answer, editPreferences);
   }
 }
