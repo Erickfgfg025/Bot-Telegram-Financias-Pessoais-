@@ -30,7 +30,7 @@ A integração é opcional: sem `GEMINI_API_KEY`, os fluxos determinísticos e a
 
 **Privacidade:** no nível gratuito da API Gemini, o conteúdo enviado pode ser usado pelo Google para melhorar seus produtos. Mensagens e áudios destinados à IA podem conter dados pessoais. Avise os usuários antes de habilitar essa função em um bot para clientes e não envie senhas, credenciais ou dados bancários completos. A API gratuita tem limites de uso que podem mudar. Consulte os [preços e condições atuais da API Gemini](https://ai.google.dev/gemini-api/docs/pricing).
 
-A Íris responde a áudio recebido com texto. Resposta de voz gerada pela IA (text-to-speech) ainda não está implementada.
+A Íris pode transcrever mensagens de voz recebidas via Gemini e, quando configurado, gerar respostas em áudio com ElevenLabs. O envio de áudio nas respostas é opcional e controlado pela preferência de voz; os comandos /start e /ajuda permanecem somente em texto para economizar créditos. Configure GEMINI_API_KEY para transcrição e ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID nas secrets do Supabase para respostas faladas.
 
 ### Sobre Ollama
 
