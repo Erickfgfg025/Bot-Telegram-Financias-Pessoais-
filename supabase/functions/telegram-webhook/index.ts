@@ -274,16 +274,16 @@ function findAmountMatch(text: string): RegExpMatchArray | null {
 }
 
 function parseEntry(text: string): { kind: "income" | "expense"; amount: number; description: string } | null {
-  const lower = text.toLocaleLowerCase("pt-BR");
+  const lower = normalizeText(text);
   const kind = /\b(recebi|ganhei|salário|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou)\b/.test(lower) ? "income" :
-    /\b(gastei|paguei|comprei|despesa|conta de|debitei|passei no cartao)\b/.test(lower) ? "expense" : null;
+    /\b(gastei|paguei|comprei|despesa|conta de|debitei|passei no cart(?:a|ã)o)\b/.test(lower) ? "expense" : null;
   if (!kind) return null;
   const match = findAmountMatch(text);
   if (!match) return null;
   const amount = parseMoney(match[0].replace(/^R\$\s*/i, ""));
   if (!amount) return null;
   const description = text.replace(match[0], " ")
-    .replace(/\b(recebi|ganhei|salário|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou|gastei|paguei|comprei|despesa|conta de|debitei|passei no cartao)\b/ig, " ")
+    .replace(/\b(recebi|ganhei|salário|salario|renda|vendi|entrou|caiu|faturei|me pagaram|me pagou|gastei|paguei|comprei|despesa|conta de|debitei|passei no cart(?:a|ã)o)\b/ig, " ")
     .replace(/\b(?:reais?|real|foi|deu|hoje|ontem|na|no|um|uma|de|do|da|por|conta)\b/ig, " ")
     .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "") ||
     (kind === "income" ? "Receita" : "Despesa");
@@ -1176,7 +1176,7 @@ function naturalMonthlyReminderCommand(raw: string, normalized: string): string 
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return "/lembremensal";
   const time = String(hour).padStart(2, "0") + ":" + String(minute).padStart(2, "0");
 
-  const requestText = raw.split(/\b(?:repeticao|pr[oó]ximo aviso)\s*:/i)[0];
+  const requestText = raw.split(/\b(?:repeticao|repetição|pr[oó]ximo aviso)\s*:/i)[0];
   const title = requestText
     .replace(/^\s*(?:(?:Íris|Iris)[,:;]?\s*)?/i, "")
     .replace(/^\s*(?:apague|apagar|exclua|excluir|remova|remover)\b[^.!?]*[.!?]\s*/i, "")
@@ -1194,6 +1194,7 @@ function naturalMonthlyReminderCommand(raw: string, normalized: string): string 
     .replace(/\b(?:na verdade|cada mes)\b/ig, " ")
     .replace(/\s+/g, " ")
     .replace(/(?:,\s*){2,}/g, ", ")
+    .replace(/^\s*(?:de|para|pra|que)\s+/i, "")
     .trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "").slice(0, 180);
   if (!title) return "/lembremensal";
   return "/lembremensal " + Number(dayMatch[1]) + " " + time + " " + title;
