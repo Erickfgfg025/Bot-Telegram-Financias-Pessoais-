@@ -1137,6 +1137,26 @@ function nextNaturalRecurringDate(frequency: "weekly" | "monthly" | "yearly") {
   return String(targetYear) + "-" + String(targetMonth).padStart(2, "0") + "-" + String(Math.min(day, lastDay)).padStart(2, "0");
 }
 
+function naturalMonthlyReminderCommand(raw: string, normalized: string): string | null {
+  const reminderIntent = /\b(?:lembrete|me lembre|me lembra|lembre-?me|lembra-?me|me avise|me avisa|avise-?me|avisa-?me|quero ser lembrad[oa])\b/.test(normalized)
+    || /\b(?:crie|criar|adicione|adicionar|agende|agendar)\s+(?:um\s+)?lembrete\b/.test(normalized);
+  const monthlyCue = /\b(?:todo|toda)\s+(?:o\s+)?mes\b|\bmensalmente\b/.test(normalized);
+  if (!reminderIntent || !monthlyCue) return null;
+  const dayMatch = normalized.match(/\bdia\s+(\d{1,2})\b/);
+  if (!dayMatch || Number(dayMatch[1]) < 1 || Number(dayMatch[1]) > 31) return "/lembremensal";
+  const title = raw
+    .replace(/^\s*(?:(?:Íris|Iris)[,:;]?\s*)?/i, "")
+    .replace(/^\s*(?:por favor[, ]*)?(?:(?:quero|crie|criar|adicione|adicionar|agende|agendar)\s+(?:um\s+)?lembrete|(?:me\s+)?(?:lembre|lembra|lembrar|avise|avisa)(?:-me)?)\s*/i, "")
+    .replace(/^\s*(?:para|pra|de)\s+/i, "")
+    .replace(/\b(?:todo|toda)\s+(?:o\s+)?m[eê]s\b/ig, " ")
+    .replace(/\bmensalmente\b/ig, " ")
+    .replace(/\bdia\s+\d{1,2}\b/ig, " ")
+    .replace(/\s+/g, " ").trim().replace(/^[,;:\- ]+|[,;:\- ]+$/g, "")
+    .replace(/^[.?!,; ]+|[.?!,; ]+$/g, "").slice(0, 180);
+  if (!title) return "/lembremensal";
+  return "/lembremensal " + Number(dayMatch[1]) + " " + title;
+}
+
 function naturalReminderCommand(raw: string, normalized: string): string | null {
   const intent = /\b(?:me lembre|me lembra|lembre-?me|lembra-?me|me avise|me avisa|avise-?me|avisa-?me|quero ser lembrad[oa])\b/.test(normalized)
     || /^(?:por favor )?(?:lembre|lembra|lembrete)\b/.test(normalized)
@@ -1305,6 +1325,8 @@ function normalizeNaturalCommand(raw: string, preferences: Record<string, unknow
   if (/\b(?:meus lancamentos recorrentes|minhas recorrencias|quais recorrencias|ver recorrencias|listar recorrencias|minhas contas fixas|minhas despesas fixas)\b/.test(normalized)) return "/recorrentes";
   if (/\b(?:meus orcamentos|ver meus orcamentos|acompanhar orcamento|como esta meu orcamento|mostrar orcamentos|listar orcamentos)\b/.test(normalized) && !/\d/.test(normalized)) return "/orcamentos";
 
+  const monthlyReminderCommand = naturalMonthlyReminderCommand(text, normalized);
+  if (monthlyReminderCommand) return monthlyReminderCommand;
   const reminderCommand = naturalReminderCommand(text, normalized);
   if (reminderCommand) return reminderCommand;
   const recurringCommand = naturalRecurringCommand(text, normalized);
@@ -1999,6 +2021,31 @@ async function sendText(chatId: number, userId: string, text: string, options: S
       if (!updated.ok) throw new Error("Could not pause recurring rule");
       answer = "⏸️ Recorrência pausada: <b>" + escapeHtml(item.description) + "</b>. Nenhum lançamento futuro será criado enquanto estiver pausada.";
     }
+  } else if (/^\/lembremensal(?:\s+.*)?$/i.test(text.trim())) {
+    const match = text.trim().match(/^\/lembremensal\s+(\d{1,2})\s+(.+)$/i);
+    if (!match) {
+      answer = "⏰ <b>Lembrete mensal</b>\\nDiga, por exemplo: <b>Me lembre todo mês dia 28 de pagar o cartão de crédito de R$ 121</b>. Vou avisar às 9h, a menos que você informe outro horário.";
+    } else {
+      const day = Number(match[1]);
+      const title = match[2].trim().slice(0, 180);
+      if (day < 1 || day > 31 || !title) {
+        answer = "Não consegui identificar o dia do mês ou o que devo lembrar. Diga, por exemplo: <b>Me lembre todo mês dia 28 de pagar o cartão de crédito</b>.";
+      } else {
+        const now = naturalLocalParts();
+        let year = now.year, month = now.month;
+        if (day < now.day || (day === now.day && (now.hour > 9 || (now.hour === 9 && now.minute > 0)))) {
+          month++;
+          if (month > 12) { month = 1; year++; }
+        }
+        const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+        const scheduledDay = Math.min(day, lastDay);
+        const date = String(year) + "-" + String(month).padStart(2, "0") + "-" + String(scheduledDay).padStart(2, "0");
+        const remindAt = new Date(date + "T09:00:00-03:00");
+        const created = await db("reminders", {method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify({user_id:userId,title,body:null,remind_at:remindAt.toISOString(),status:"pending",recurrence_frequency:"monthly",recurrence_day:day})});
+        if (!created.ok) throw new Error("Could not create monthly reminder");
+        answer = "⏰ <b>Lembrete mensal criado</b>\\n" + escapeHtml(title) + "\\nRepetição: todo dia " + day + " de cada mês, às 9h\\nPróximo aviso: " + remindAt.toLocaleString("pt-BR", {timeZone:"America/Fortaleza"}) + "\\n\\nIsso é apenas um lembrete: não vou lançar a despesa automaticamente.";
+      }
+    }
   } else if (/^\/lembrete(?:\s+.*)?$/i.test(text.trim())) {
     const match = text.trim().match(/^\/lembrete\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})\s+(.+)$/i);
     if (!match) {
@@ -2018,11 +2065,11 @@ async function sendText(chatId: number, userId: string, text: string, options: S
       }
     }
   } else if (/^\/lembretes\b/i.test(text.trim())) {
-    const response = await db("reminders?user_id=eq." + encodeURIComponent(userId) + "&status=eq.pending&select=id,title,remind_at,status&order=remind_at.asc&limit=20");
+    const response = await db("reminders?user_id=eq." + encodeURIComponent(userId) + "&status=eq.pending&select=id,title,remind_at,status,recurrence_frequency,recurrence_day&order=remind_at.asc&limit=20");
     if (!response.ok) throw new Error("Could not read reminders");
     const rows = await response.json();
     answer = Array.isArray(rows) && rows.length
-      ? "⏰ <b>Seus lembretes pendentes</b>\n\n" + rows.map((r: any, i: number) => (i + 1) + ". <b>" + escapeHtml(r.title) + "</b>\n   " + new Date(r.remind_at).toLocaleString("pt-BR", {timeZone:"America/Fortaleza"})).join("\n\n")
+      ? "⏰ <b>Seus lembretes pendentes</b>\n\n" + rows.map((r: any, i: number) => (i + 1) + ". <b>" + escapeHtml(r.title) + "</b>" + (r.recurrence_frequency === "monthly" ? " · 🔁 mensal" : "") + "\n   " + new Date(r.remind_at).toLocaleString("pt-BR", {timeZone:"America/Fortaleza"})).join("\n\n")
       : "📭 Você não tem lembretes pendentes. Diga, por exemplo: <b>Me lembre amanhã às 9 de pagar a conta</b>.";
   } else if (/^\/cancelarlembrete\s+\d+\s*$/i.test(text.trim())) {
     const index = Number(text.trim().match(/^\/cancelarlembrete\s+(\d+)/i)?.[1] || 0);
