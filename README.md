@@ -12,12 +12,12 @@ A Íris é uma assistente de finanças pessoais para Telegram, com Supabase como
 - Excluir lançamentos somente após confirmação explícita.
 - Definir e acompanhar orçamentos por categoria, com alertas ao cruzar 80% e 100% do limite.
 - Criar/listar/cancelar lembretes e criar/listar/pausar lançamentos recorrentes usando linguagem natural.
-- Processar mensagens de texto e, com a API Gemini configurada, receber áudios do Telegram, transcrevê-los e responder por texto.
+- Processar mensagens de texto e, com a API Gemini configurada, transcrever áudios recebidos; as respostas podem ser em texto e, opcionalmente, áudio via ElevenLabs.
 - Manter histórico de conversas e processar atualizações do Telegram com controle de duplicidade.
 
 ## Conversa por IA e áudio (opcional)
 
-O webhook inclui integração opcional com o modelo `gemini-3.1-flash-lite` para interpretar pedidos não reconhecidos pelas regras existentes e responder sobre assuntos gerais. Também usa o modelo para transcrever áudios curtos enviados como mensagem de voz.
+O webhook inclui integração opcional com o modelo `gemini-3.5-flash-lite` para interpretar pedidos não reconhecidos pelas regras existentes e responder sobre assuntos gerais. Também usa o modelo para transcrever áudios curtos enviados como mensagem de voz.
 
 Para ativar:
 
